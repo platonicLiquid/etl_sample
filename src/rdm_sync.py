@@ -14,7 +14,7 @@ from rdm_exclude import return_excluded_rdms as exclude_list
 
 # logging setup
 current_date = date.today()
-logging.basicConfig(filename=f'log_{current_date}.log', encoding='utf-8', level=logging.DEBUG)
+logging.basicConfig(filename=f'./logs/log_{current_date}.log', encoding='utf-8', level=logging.DEBUG)
 
 # threads on my machine
 NUM_THREADS = 16

@@ -1,5 +1,9 @@
 __pycache__
 __pycache__/*
 
+logs
+logs/*
+
 src/rdm_secrets.py
 src/notion_secrets.py
+log_2024-02-14.log
