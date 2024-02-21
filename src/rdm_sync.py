@@ -9,7 +9,7 @@ from notion.client import NotionClient
 
 # lskm import
 from notion_secrets import secrets
-import riot_org_scraper
+import rdm_scraper
 from rdm_exclude import return_excluded_rdms as exclude_list
 
 # logging setup
@@ -79,19 +79,96 @@ def return_properties(view, columns, skip=False):
             logging.info(f'{elem['name']} = {elem['id']}')
     return(properties_dict)
 
-def return_teams_dict(debug=False):
-    response = riot_org_scraper.call_riotorg('teams', debug)
+def teams_scope_crawl(response):
+    rdm_list = response['node']
+
+    #process rdm_list
+    rdm_dict = {}
+    for row in rdm_list:
+        rdm_dict[row['rrn']] = row
+    graphql_list = response['graphql']['group']
+
+    # process graph_ql list
+    for row in graphql_list:
+        rrn = row['_rdm_rrn']
+        try:
+            group = rdm_dict[rrn]
+            group['scope'] = row['scope']
+        except:
+            group['scope'] = None
+            logging.debug(f'Key lookup error in "rdm_dict" for rdm_rrn: {rrn}')
+
+    # crawl through rdm_dict scopes and establish parent rdm_rrns
+    for rdm_rrn in rdm_dict:
+        group = rdm_dict[rdm_rrn]
+        scope = group['scope']
+        if not scope:
+            continue
+        split_list = scope.split('.')
+        split_list_len = len(split_list)
+        zero_start_modifier = 1
+        partition_str = f'.{split_list[split_list_len - zero_start_modifier]}'
+        rpartiontion_scope = scope.rpartition(partition_str)
+        parent_scope = rpartiontion_scope[0]
+
+        group['parent_scope'] = parent_scope
+    
+    for rdm_rrn in rdm_dict:
+        child = rdm_dict[rdm_rrn]
+        child['parent_group'] = None
+
+        try:
+            parent_scope = child['parent_scope']
+        except:
+            continue
+
+        for rrn in rdm_dict:
+            parent = rdm_dict[rrn]
+            try:
+                if parent['scope'] == parent_scope:
+                    child['parent_group'] = rrn
+            except:
+                continue
+    
+    return rdm_dict
+
+def products_owner_crawl(response):
+    rdm_list = response['node']
+
+    #process rdm_list
+    rdm_dict = {}
+    for row in rdm_list:
+        rdm_dict[row['rrn']] = row
+    graphql_list = response['graphql']['product']
+
+    for row in graphql_list:
+        rrn = row['_rdm_rrn']
+        owners_edge_list = row['groupOwnsProductEdge']
+        owners_list = []
+        for elem in owners_edge_list:
+            group = elem['group']
+            rdm_rrn = group['_rdm_rrn']
+            owners_list.append(rdm_rrn)
+        try:
+            product = rdm_dict[rrn]
+            product['owned_by'] = owners_list
+        except:
+            logging.debug(f'Key error for rdm_dict for rdm_rrn: {rrn}')
+            continue
+
+    return rdm_dict
+
+def return_teams_dict():
+    response = rdm_scraper.call_riotorg('teams')
     logging.info('Teams Dictioanry:')
-    if debug:
-        rdm_dict = response[0]
-        debug_dict = response[1]
-        logging.debug('TEAMS DEBUG DICTIONARY')
-        logging.debug(debug_dict)
-    else:
-        rdm_dict = response
+    
+    rdm_dict = teams_scope_crawl(response)
+
+    logging.debug(response['debug'])
+
     teams_dict = {}
-    for group in rdm_dict:
-        rdm_rrn = group['rrn']
+    for rdm_rrn in rdm_dict:
+        group = rdm_dict[rdm_rrn]
         data = group['data']
         created_at = group['created_at']
         last_updated_at = group['updated_at']
@@ -110,10 +187,7 @@ def return_teams_dict(debug=False):
         riotorg_api_id = data['groups_api_id']
         mission = data['description']
         group_type = data['type']
-        if group['contained_by']:
-            parent_group = group['contained_by'][0]['_rdm_rrn']
-        else:
-            parent_group = None
+        parent_group = group['parent_group']
 
         teams_dict[rdm_rrn] = {
             'rdm_rrn': rdm_rrn,
@@ -135,27 +209,26 @@ def return_teams_dict(debug=False):
             'present_on_rdm_bool': True
         }
     logging.info(teams_dict)
-    return(teams_dict)
+    return teams_dict
 
-def return_products_dict(debug=False):
-    response = riot_org_scraper.call_riotorg('products', debug)
+def return_products_dict():
+    response = rdm_scraper.call_riotorg('products')
     logging.info('Products Dictionary')
-    if debug:
-        rdm_dict = response[0]
-        debug_dict = response[1]
-        logging.debug('PRODUCTS DEBUG DICTIONARY')
-        logging.debug(debug_dict)
-    else:
-        rdm_dict = response
+
+    rdm_dict = products_owner_crawl(response)
+
+    logging.debug(response['debug'])
+    
     products_dict = {}
-    for product in rdm_dict:
-        rdm_rrn = product['_rdm_rrn']
-        created_at = product['_rdm_created_at']
-        last_updated_at = product['_rdm_updated_at']
-        version = product['_rdm_version']
-        fullname = product['name']
-        email_contact = product.get('email', '')
-        slack = product.get('slack', '')
+    for rdm_rrn in rdm_dict:
+        product = rdm_dict[rdm_rrn]
+        data = product['data']
+        created_at = product['created_at']
+        last_updated_at = product['updated_at']
+        version = product['version']
+        fullname = data['name']
+        email_contact = data.get('email', '')
+        slack = data.get('slack', '')
         slack_url = f'https://riotgames.slack.com/archives/{slack}'
         slack_string = f'{slack}'
         slack_contact = slack
@@ -163,25 +236,14 @@ def return_products_dict(debug=False):
             slack_md = f'[{slack_string}]({slack_url})'
         else:
             slack_md = ''
-        try:
-            pager_duty = product['pager_duty']
-        except:
-            pager_duty = ''
+        pager_duty = data.get('pager_duty', '')
         riotorg_url = f'https://org.riotnet.io/product/{rdm_rrn}'
-        try:
-            product_url = product['product_url']
-        except:
-            product_url = ''
-        description = product['description']
+        product_url = product.get('product_url', '')
+        description = data['description']
         product_type = product.get('type', 'Unknown')
-        if product['owned_by']:
-            parent_groups = product['owned_by']
-            parent_rdm_rrns = []
-            for parent in parent_groups:
-                parent_rdm_rrns.append(parent['_rdm_rrn'])
-        else:
-            continue
-        status = product.get('status', None)
+        parent_rdm_rrns = product['owned_by']
+        
+        status = data.get('status', None)
 
 
         products_dict[rdm_rrn] = {
@@ -202,7 +264,8 @@ def return_products_dict(debug=False):
             'Status': status,
             'Riot Org URL (Click to Edit Record)': riotorg_url,
             'parent_groups': parent_rdm_rrns,
-            'present_on_rdm_bool': True
+            'present_on_rdm_bool': True,
+            'status': status
         }
     logging.info(products_dict)
     return(products_dict)
@@ -624,24 +687,24 @@ def update_relations(use_prod_or_dev):
         executor.map(map_rows, products_rows)
             
 
-def update_pages(use_prod_or_dev, debug=False):
+def update_pages(use_prod_or_dev):
     view_dict = use_prod_or_dev_dbs(use_prod_or_dev)
     TEAMS_COLLECTION_VIEW = view_dict['TEAMS_VIEW']
     PRODUCTS_COLLECTION_VIEW = view_dict['PRODUCTS_VIEW']
 
+    print('updating teams')
     teams_view = CLIENT.get_collection_view(BASE_URL + TEAMS_COLLECTION_VIEW)
-    teams_dict = return_teams_dict(debug)
-    #update_teams(teams_view, teams_dict)
+    teams_dict = return_teams_dict()
+    update_teams(teams_view, teams_dict)
 
+    print('updating products')
     products_view = CLIENT.get_collection_view(BASE_URL + PRODUCTS_COLLECTION_VIEW)
-    products_dict = return_products_dict(debug)
+    products_dict = return_products_dict()
     update_products(products_view, products_dict, teams_dict)
     print('done')
 
 def testing():
-    teams_dict = return_teams_dict()
-    for key in teams_dict:
-        print(teams_dict[key])
+
     products_dict = return_products_dict()
     for key in products_dict:
         print(products_dict[key])
@@ -649,7 +712,7 @@ def testing():
 
 
 def main():
-    update_pages(use_prod_or_dev='DEV', debug=True)
+    update_pages(use_prod_or_dev='DEV')
 
 if __name__ == '__main__':
-    testing()
+    main()
