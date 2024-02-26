@@ -41,16 +41,13 @@ def call_riotorg(teams_or_products):
 
     #we force the value back into an integer after dividing it
     for page_number in range(int(total_items/max_page_size) + zero_start_increment):
-        page_size = min(total_items, max_page_size)
-        total_items = total_items - max_page_size
-        full_response = rdm_wrapper.rdm_api(name, TOKEN, kind, pagesize=page_size, page=page_number)
+        full_response = rdm_wrapper.rdm_api(name, TOKEN, kind, pagesize=max_page_size, page=page_number+1)
         full_response.call_api()
         if not full_response.response.status_code == 200:
             print(f'STATUS CODE: {full_response.response.status_code}. \nREASON: {full_response.response.reason}.')
             raise Exception
         full_response_text = json.loads(full_response.response.text)
         node_return_body = node_return_body + full_response_text['body']
-    
 
     query_string = return_query_string(teams_or_products)
     graphql_response = rdm_wrapper.rdm_api('graphql', token=TOKEN)

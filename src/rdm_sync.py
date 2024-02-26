@@ -2,10 +2,11 @@
 import concurrent.futures
 from datetime import date
 import logging
-
+import csv
 
 # 3rd party imports
 from notion.client import NotionClient
+import pandas
 
 # lskm import
 from notion_secrets import secrets
@@ -52,7 +53,8 @@ PRODUCTS_COLUMNS_ITERATOR = ['Product Name', 'Type', 'Brief Description',
 TEAMS_COLUMNS_ITERATOR = ['Team Name', 'Type', 'Mission', 'Slack', 'Email',
     'Riot Org URL (Click to Edit Record)', 'rdm_rrn']
 SKIP_LIST = ['Parent', 'Homepage', 'Children', 'Products', 'Owning Team(s)']
-EXCLUDE_LIST = exclude_list()
+#EXCLUDE_LIST = exclude_list()
+EXCLUDE_LIST = []
 
 def use_prod_or_dev_dbs(db_type = 'DEV'):
     if db_type == 'DEV':
@@ -78,6 +80,23 @@ def return_properties(view, columns, skip=False):
             properties_dict[elem['name']] = elem['id']
             logging.info(f'{elem['name']} = {elem['id']}')
     return(properties_dict)
+
+def column_test(view, expected_column_names):
+    columns = view.collection.get_schema_properties()
+    
+    actual_column_names = set(())
+    for elem in columns:
+        actual_column_names.add(elem['name'])
+    expected_column_names = set(expected_column_names)
+    column_test_bool = expected_column_names.issubset(actual_column_names)
+
+    if not column_test_bool:
+        print('Incorrect column names.')
+        title = view.collection.title_plaintext()
+        logging.error(f'Column Names are incorrect for {title}.')
+        raise Exception
+    else:
+        return column_test_bool
 
 def teams_scope_crawl(response):
     rdm_list = response['node']
@@ -137,10 +156,12 @@ def products_owner_crawl(response):
 
     #process rdm_list
     rdm_dict = {}
+    count = 0
     for row in rdm_list:
         rdm_dict[row['rrn']] = row
-    graphql_list = response['graphql']['product']
 
+    graphql_list = response['graphql']['product']
+    
     for row in graphql_list:
         rrn = row['_rdm_rrn']
         owners_edge_list = row['groupOwnsProductEdge']
@@ -163,7 +184,6 @@ def return_teams_dict():
     logging.info('Teams Dictioanry:')
     
     rdm_dict = teams_scope_crawl(response)
-
     logging.debug(response['debug'])
 
     teams_dict = {}
@@ -216,7 +236,6 @@ def return_products_dict():
     logging.info('Products Dictionary')
 
     rdm_dict = products_owner_crawl(response)
-
     logging.debug(response['debug'])
     
     products_dict = {}
@@ -280,7 +299,7 @@ def add_notion_uuids_to_dict(view, teams_dict):
             uuid = row.id
             group['notion_uuid'] = uuid
     else:
-        # if this exception is raise, reset your v2 token.
+        # if this exception is raised, reset your v2 token.
         print('No rows, TOKEN RESET REQUIRED.')
         logging.exception('TOKEN RESET REQUIRED')
         raise Exception
@@ -322,14 +341,7 @@ def update_page_properties(page, properties_list, properties_dictionary, rdm_ent
         print(e)
         raise Exception
 
-def map_current_rows(row, teams_dict, ):
-    pass
-    
-def update_teams(view, teams_dict):
-    
-    teams_properties_dict = return_properties(view, TEAMS_COLUMNS, skip=True)
-    current_rows = view.collection.get_rows()
-
+def update_current_rows_teams(teams_dict, teams_properties_dict, current_rows):
     #tracks which rdm_rrns have been processed
     tracking_dict = {}
     for rdm_rrn in teams_dict:
@@ -357,7 +369,10 @@ def update_teams(view, teams_dict):
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
         executor.map(map_current_rows, current_rows)
+    
+    return tracking_dict
 
+def create_new_teams_pages(view, teams_dict, teams_properties_dict, tracking_dict):
     # iterate over every rdm_rrn that is false in the tracking dictionary 
     # and create a new page
     def map_teams_dict(rdm_rrn):
@@ -378,9 +393,7 @@ def update_teams(view, teams_dict):
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
         executor.map(map_teams_dict, tracking_dict)
 
-    current_rows = view.collection.get_rows()
-    teams_properties_dict = return_properties(view, TEAMS_COLUMNS)
-
+def map_teams_hierarchy(teams_dict, teams_properties_dict, current_rows):
     def map_hierarchy(row):
     #for row in current_rows:
         rdm_rrn = row.get_property(teams_properties_dict['rdm_rrn'])
@@ -411,9 +424,20 @@ def update_teams(view, teams_dict):
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
         executor.map(map_hierarchy, current_rows)
 
-def update_products(view, products_dict, teams_dict):
-    products_properties_dict = return_properties(view, PRODUCTS_COLUMNS, skip=False)
+def update_teams(view, teams_dict):  
+    teams_properties_dict = return_properties(view, TEAMS_COLUMNS, skip=True)
     current_rows = view.collection.get_rows()
+    
+    #update current pages and create new pages as needed
+    tracking_dict = update_current_rows_teams(teams_dict, teams_properties_dict, current_rows)
+    create_new_teams_pages(view, teams_dict, teams_properties_dict, tracking_dict)
+
+    # reinitialize current_rows and teams_properties_dict
+    teams_properties_dict = return_properties(view, TEAMS_COLUMNS)
+    current_rows = view.collection.get_rows()
+    map_teams_hierarchy(teams_dict, teams_properties_dict, current_rows)
+
+def update_current_products(products_dict, products_properties_dict, current_rows):
     tracking_dict = {}
 
     for rdm_rrn in products_dict:
@@ -442,6 +466,9 @@ def update_products(view, products_dict, teams_dict):
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
         executor.map(map_current_rows, current_rows)
 
+    return tracking_dict
+
+def creat_new_products_pages(view, products_dict, products_properties_dict, tracking_dict):
     # iterate over every rdm_rrn that is false in the tracking dictionary 
     # and create a new page
     print(f'Creating new products.')
@@ -463,9 +490,7 @@ def update_products(view, products_dict, teams_dict):
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
         executor.map(map_products_dict, products_dict)
 
-    current_rows = view.collection.get_rows()
-    products_properties_dict = return_properties(view, PRODUCTS_COLUMNS)
-
+def map_products_hierarchy(products_dict, products_properties_dict, current_rows, teams_dict):
     def map_hierarchy(row):
     #for row in current_rows:
         rdm_rrn = row.get_property(products_properties_dict['rdm_rrn'])
@@ -488,6 +513,20 @@ def update_products(view, products_dict, teams_dict):
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
         executor.map(map_hierarchy, current_rows)
 
+def update_products(view, products_dict, teams_dict):
+    products_properties_dict = return_properties(view, PRODUCTS_COLUMNS, skip=False)
+    current_rows = view.collection.get_rows()
+
+    tracking_dict = update_current_products(products_dict, products_properties_dict, current_rows)
+    creat_new_products_pages(view, products_dict, products_properties_dict, tracking_dict)
+
+    # reinitialize current_rows and products_properties_dict
+    products_properties_dict = return_properties(view, PRODUCTS_COLUMNS)
+    current_rows = view.collection.get_rows()
+    map_products_hierarchy(products_dict, products_properties_dict, current_rows, teams_dict)
+
+
+# old code, not sure if needed any more. Almost certainly outdated.
 def map_product_owning_teams(teams_view, products_view, products_dict):
     teams_rows = teams_view.collection.get_rows()
     teams_properties = return_properties(teams_view, TEAMS_COLUMNS)
@@ -566,8 +605,8 @@ def update_relations(use_prod_or_dev):
         #print(f'done mapping {row.title_plaintext}')
         #return
     
-    '''with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
-        executor.map(map_rows, teams_rows)'''
+    #with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+    #    executor.map(map_rows, teams_rows)
     if not teams_dict:
         raise Exception
     print('done mapping teams_dict')
@@ -621,18 +660,15 @@ def update_relations(use_prod_or_dev):
         print(return_id)
         return return_id
     
-    count = 0
     for id in teams_dict:
         entry = teams_dict[id]
         if entry['type'] in exlude:
             print(f'excluding {id}. Continuing.')
-            count += 1
             continue
         owning_initiative = find_initative(id)
         owning_bu = find_BU(id)
         entry['owning_initiative'] = owning_initiative
         entry['owning_bu'] = owning_bu
-        count += 1
 
 
     print(f'mapping teams')
@@ -652,14 +688,14 @@ def update_relations(use_prod_or_dev):
             return
         owning_initiative = entry['owning_initiative']
         owning_bu = entry['owning_bu']
-        #print(f'setting values for {id}')
+        print(f'setting values for {id}')
         if owning_initiative:
             row.set_property(teams_properties['Owning Initiative'], owning_initiative)
         if owning_bu:
             row.set_property(teams_properties['Owning Business Unit'], owning_bu)
     
-    #with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
-    #    executor.map(map_rows, teams_rows)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+        executor.map(map_rows, teams_rows)
 
     products_rows = products_view.collection.get_rows()
     print(f'mapping products')
@@ -675,6 +711,7 @@ def update_relations(use_prod_or_dev):
             entry = teams_dict[owning_team_id]
             owning_initiative = entry['owning_initiative']
             owning_bu = entry['owning_bu']
+            print(f'setting values for {owning_team_id}')
             if owning_initiative:
                 row.set_property(products_properties['Owning Initiative'], owning_initiative)
             if owning_bu:
@@ -685,34 +722,166 @@ def update_relations(use_prod_or_dev):
             return
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
         executor.map(map_rows, products_rows)
-            
 
 def update_pages(use_prod_or_dev):
+    #retrive collection ids for prod or dev
     view_dict = use_prod_or_dev_dbs(use_prod_or_dev)
     TEAMS_COLLECTION_VIEW = view_dict['TEAMS_VIEW']
     PRODUCTS_COLLECTION_VIEW = view_dict['PRODUCTS_VIEW']
 
     print('updating teams')
     teams_view = CLIENT.get_collection_view(BASE_URL + TEAMS_COLLECTION_VIEW)
+    #verify that breaking changes have not been made to column names
+    column_test(teams_view, TEAMS_COLUMNS)
     teams_dict = return_teams_dict()
     update_teams(teams_view, teams_dict)
 
     print('updating products')
     products_view = CLIENT.get_collection_view(BASE_URL + PRODUCTS_COLLECTION_VIEW)
+    #verify that breaking changes have not been made to column names
+    column_test(products_view, PRODUCTS_COLUMNS)
     products_dict = return_products_dict()
     update_products(products_view, products_dict, teams_dict)
     print('done')
 
-def testing():
+def write_to_csv(title, list):
+    df = pandas.DataFrame(list)
+    df.to_csv(f'./src/validation_files/{current_date}_{title}.csv', index=False)
 
+def validtate_notion_teams(TEAMS_COLLECTION_VIEW):
+    teams_view = CLIENT.get_collection_view(BASE_URL + TEAMS_COLLECTION_VIEW)
+    print('starting teams_view')
+    teams_view_list = []
+    teams_view_headers = ['id', 'title']
+    teams_view_header_dict = {}
+
+    for elem in teams_view.collection.get_schema_properties():
+        teams_view_headers.append(elem['name'])
+        teams_view_header_dict[elem['name']] = elem['slug']
+
+    teams_view_list.append(teams_view_headers)
+    print('before get rows')
+    current_rows = teams_view.collection.get_rows()
+
+    def map_rows(row):
+        print(f'at row {row.title_plaintext}')
+        properties = row.get_all_properties()
+        values_list = [row.id, row.title_plaintext]
+        for key in teams_view_header_dict:
+            slug = teams_view_header_dict[key]
+            values_list.append(properties[slug])
+        teams_view_list.append(values_list)
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+        executor.map(map_rows, current_rows)
+
+    print('writing teams_view csv')
+    title = 'teams_view'
+    write_to_csv(title, teams_view_list)
+    
+    return teams_view_list
+
+def validate_notion_products(PRODUCTS_COLLECTION_VIEW):
+    products_view = CLIENT.get_collection_view(BASE_URL + PRODUCTS_COLLECTION_VIEW)
+
+    print('starting products_view')
+    products_view_list = []
+    products_view_headers = ['id', 'title']
+    products_view_header_dict = {}
+
+    for elem in products_view.collection.get_schema_properties():
+        products_view_headers.append(elem['name'])
+        products_view_header_dict[elem['name']] = elem['slug']
+
+    products_view_list.append(products_view_headers)
+    print('before get rows')
+    current_rows = products_view.collection.get_rows()
+
+    def map_rows(row):
+        print(f'at row {row.title_plaintext}')
+        properties = row.get_all_properties()
+        values_list = [row.id, row.title_plaintext]
+        for key in products_view_header_dict:
+            slug = products_view_header_dict[key]
+            values_list.append(properties[slug])
+        products_view_list.append(values_list)
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+        executor.map(map_rows, current_rows)
+
+    print('writing products_view csv')
+    title = 'products_view'
+    write_to_csv(title, products_view_list)
+
+def validate_rdm_teams():
+    print('starting rdm_teams')
+    teams_dict = return_teams_dict()
+    rdm_teams_list = []
+    rdm_teams_headers = []
+    for rdm_rrn in teams_dict:
+        for key in teams_dict[rdm_rrn]:
+            rdm_teams_headers.append(key)
+        break
+    
+    rdm_teams_list.append(rdm_teams_headers)
+
+    for rdm_rrn in teams_dict:
+        team = teams_dict[rdm_rrn]
+        values = []
+        for key in rdm_teams_headers:
+            values.append(team[key])
+        rdm_teams_list.append(values)
+    
+
+    print('writing rdm_teams csv')
+    title = 'teams_rdm'
+    write_to_csv(title, rdm_teams_list)
+
+def validate_rdm_products():
     products_dict = return_products_dict()
-    for key in products_dict:
-        print(products_dict[key])
-    test ='test'
 
+    rdm_products_list = []
+    rdm_products_headers = []
+    for rdm_rrn in products_dict:
+        for key in products_dict[rdm_rrn]:
+            rdm_products_headers.append(key)
+        break
+    
+    rdm_products_list.append(rdm_products_headers)
+
+    for rdm_rrn in products_dict:
+        product = products_dict[rdm_rrn]
+        values = []
+        for key in rdm_products_headers:
+            values.append(product[key])
+        rdm_products_list.append(values)
+    
+    print('writing rdm_products csv')
+    title = 'products_rdm'
+    write_to_csv(title, rdm_products_list)
+
+def validation(use_prod_or_dev):
+    view_dict = use_prod_or_dev_dbs(use_prod_or_dev)
+    TEAMS_COLLECTION_VIEW = view_dict['TEAMS_VIEW']
+    PRODUCTS_COLLECTION_VIEW = view_dict['PRODUCTS_VIEW']
+
+    # generate csv for teams view
+    validtate_notion_teams(TEAMS_COLLECTION_VIEW)
+
+    # generate csv for rdm groups
+    validate_rdm_teams()
+
+    # generate csv for products view
+    validate_notion_products(PRODUCTS_COLLECTION_VIEW)
+
+    # generate csv for rdm products
+    validate_rdm_products()
 
 def main():
-    update_pages(use_prod_or_dev='DEV')
+    use_prod_or_dev = 'DEV'
+    #update_pages(use_prod_or_dev)
+    update_relations(use_prod_or_dev)
+    #validation(use_prod_or_dev)
 
 if __name__ == '__main__':
     main()
