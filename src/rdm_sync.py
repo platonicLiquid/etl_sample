@@ -10,292 +10,48 @@ import pandas
 
 # lskm import
 from notion_secrets import secrets
-import rdm_scraper
-from rdm_exclude import return_excluded_rdms as exclude_list
+from scraper import call_riotorg
+from transform_data import transform_war_group_data, transform_rdm_product_data
+from rdm_classes import rdm_obj, dry_run
+from pickle_jars import pickle_dictionary, open_pickle_jar
 
 # logging setup
 current_date = date.today()
 logging.basicConfig(filename=f'./logs/log_{current_date}.log', encoding='utf-8', level=logging.DEBUG)
 
 # threads on my machine
-NUM_THREADS = 16
+
 
 # client setup for Notion module. Uses notion secrets file.
 # Base URL is for our notion instance.
 CLIENT = NotionClient(token_v2= secrets()['session_token'])
 BASE_URL = 'https://www.notion.so/riotgames/'
 
-# these are the collection view Notion UUIDs. 
-# Prod is live production. Dev is for development
-PRODUCTS_COLLECTION_VIEW_PROD = '70cf378fbdd741cb9d72540ce61d0094?'\
-    'v=aa863dfcef684d4bb0a58f5f193804e7'
-TEAMS_COLLECTION_VIEW_PROD = 'f84cbf26f3cd4e3a8adae7fa61dc0206?'\
-    'v=cb5473ceba2d473aa140fa7e60a9cca4'
-PRODUCTS_COLLECTION_VIEW_DEV = '1ff035d114a74adfa15a2b7209537900?'\
-    'v=fac89a0b0c7147c195c212e221137f2a'
-TEAMS_COLLECTION_VIEW_DEV = '840d79a1174949698c080796ed46a1aa?'\
-    'v=f69fc64270bf48e686951c4da1d06181'
-
-#Columns are used to map column ids
-PRODUCTS_COLUMNS = ['Product Name', 'Type', 'Owning Team(s)', 'Brief Description',
-    'Homepage', 'Slack', 'Email', 'Pager Duty', 'Status', 'Riot Org URL (Click to Edit Record)',
-    'rdm_rrn', 'Owning Business Unit', 'Owning Initiative']
-TEAMS_COLUMNS = ['Team Name', 'Type', 'Homepage', 'Mission', 'Active?',
-    'Parent', 'Children', 'Captain', 'Slack', 'Email', 'Support Channels',
-    'Products', 'Riot Org URL (Click to Edit Record)', 'rdm_rrn', 'Owning Business Unit',
-    'Owning Initiative']
-#Iterators are used as the properties we want to set.
-# todo: add the following properties:
-#    'Homepage', 'Captain'
-PRODUCTS_COLUMNS_ITERATOR = ['Product Name', 'Type', 'Brief Description',
-    'Homepage', 'Slack', 'Email', 'Pager Duty', 'Status', 'Riot Org URL (Click to Edit Record)',
-    'rdm_rrn']
-TEAMS_COLUMNS_ITERATOR = ['Team Name', 'Type', 'Mission', 'Slack', 'Email',
-    'Riot Org URL (Click to Edit Record)', 'rdm_rrn']
-SKIP_LIST = ['Parent', 'Homepage', 'Children', 'Products', 'Owning Team(s)']
-#EXCLUDE_LIST = exclude_list()
-EXCLUDE_LIST = []
-
-def use_prod_or_dev_dbs(db_type = 'DEV'):
-    if db_type == 'DEV':
-        VIEW_DICT = {
-            'PRODUCTS_VIEW': PRODUCTS_COLLECTION_VIEW_DEV,
-            'TEAMS_VIEW': TEAMS_COLLECTION_VIEW_DEV
-        }
-    elif db_type == 'PROD':
-        VIEW_DICT = {
-                'PRODUCTS_VIEW': PRODUCTS_COLLECTION_VIEW_PROD,
-                'TEAMS_VIEW': TEAMS_COLLECTION_VIEW_PROD
-            }
-    return(VIEW_DICT)
-
-def return_properties(view, columns, skip=False):
-    properties_dict = {}
-    logging.info('Properties Values:')
-    for elem in view.collection.get_schema_properties():
-        if skip:
-            if elem['name'] in SKIP_LIST:
-                continue
-        if elem['name'] in columns:
-            properties_dict[elem['name']] = elem['id']
-            logging.info(f'{elem['name']} = {elem['id']}')
-    return(properties_dict)
-
-def column_test(view, expected_column_names):
-    columns = view.collection.get_schema_properties()
-    
-    actual_column_names = set(())
-    for elem in columns:
-        actual_column_names.add(elem['name'])
-    expected_column_names = set(expected_column_names)
-    column_test_bool = expected_column_names.issubset(actual_column_names)
-
-    if not column_test_bool:
-        print('Incorrect column names.')
-        title = view.collection.title_plaintext()
-        logging.error(f'Column Names are incorrect for {title}.')
-        raise Exception
-    else:
-        return column_test_bool
-
-def teams_scope_crawl(response):
-    rdm_list = response['node']
-
-    #process rdm_list
-    rdm_dict = {}
-    for row in rdm_list:
-        rdm_dict[row['rrn']] = row
-    graphql_list = response['graphql']['group']
-
-    # process graph_ql list
-    for row in graphql_list:
-        rrn = row['_rdm_rrn']
-        try:
-            group = rdm_dict[rrn]
-            group['scope'] = row['scope']
-        except:
-            group['scope'] = None
-            logging.debug(f'Key lookup error in "rdm_dict" for rdm_rrn: {rrn}')
-
-    # crawl through rdm_dict scopes and establish parent rdm_rrns
-    for rdm_rrn in rdm_dict:
-        group = rdm_dict[rdm_rrn]
-        scope = group['scope']
-        if not scope:
-            continue
-        split_list = scope.split('.')
-        split_list_len = len(split_list)
-        zero_start_modifier = 1
-        partition_str = f'.{split_list[split_list_len - zero_start_modifier]}'
-        rpartiontion_scope = scope.rpartition(partition_str)
-        parent_scope = rpartiontion_scope[0]
-
-        group['parent_scope'] = parent_scope
-    
-    for rdm_rrn in rdm_dict:
-        child = rdm_dict[rdm_rrn]
-        child['parent_group'] = None
-
-        try:
-            parent_scope = child['parent_scope']
-        except:
-            continue
-
-        for rrn in rdm_dict:
-            parent = rdm_dict[rrn]
-            try:
-                if parent['scope'] == parent_scope:
-                    child['parent_group'] = rrn
-            except:
-                continue
-    
-    return rdm_dict
-
-def products_owner_crawl(response):
-    rdm_list = response['node']
-
-    #process rdm_list
-    rdm_dict = {}
-    count = 0
-    for row in rdm_list:
-        rdm_dict[row['rrn']] = row
-
-    graphql_list = response['graphql']['product']
-    
-    for row in graphql_list:
-        rrn = row['_rdm_rrn']
-        owners_edge_list = row['groupOwnsProductEdge']
-        owners_list = []
-        for elem in owners_edge_list:
-            group = elem['group']
-            rdm_rrn = group['_rdm_rrn']
-            owners_list.append(rdm_rrn)
-        try:
-            product = rdm_dict[rrn]
-            product['owned_by'] = owners_list
-        except:
-            logging.debug(f'Key error for rdm_dict for rdm_rrn: {rrn}')
-            continue
-
-    return rdm_dict
-
-def return_teams_dict():
-    response = rdm_scraper.call_riotorg('teams')
-    logging.info('Teams Dictioanry:')
-    
-    rdm_dict = teams_scope_crawl(response)
-    logging.debug(response['debug'])
-
-    teams_dict = {}
-    for rdm_rrn in rdm_dict:
-        group = rdm_dict[rdm_rrn]
-        data = group['data']
-        created_at = group['created_at']
-        last_updated_at = group['updated_at']
-        version = group['version']
-        fullname = data['name']
-        shortname = data['abbr']
-        email_contact = data['contact_email']
-        slack_url = f'https://riotgames.slack.com/archives/{data['contact_slack']}'
-        slack_string = f'#{data['contact_slack']}'
-        slack_contact = data['contact_slack']
-        if slack_contact:
-            slack_md = f'[{slack_string}]({slack_url})'
-        else:
-            slack_md = ''
-        riotorg_url = data['group_url']
-        riotorg_api_id = data['groups_api_id']
-        mission = data['description']
-        group_type = data['type']
-        parent_group = group['parent_group']
-
-        teams_dict[rdm_rrn] = {
-            'rdm_rrn': rdm_rrn,
-            'created_at': created_at,
-            'last_updated_at': last_updated_at,
-            'version': version,
-            'Team Name': fullname,
-            'shortname': shortname,
-            'Email': email_contact,
-            'slack_url': slack_url,
-            'slack_string': slack_string,
-            'Slack': slack_md,
-            'slack_contact': slack_contact,
-            'Riot Org URL (Click to Edit Record)': riotorg_url,
-            'riotorg_api_id': riotorg_api_id,
-            'Mission': mission,
-            'Type': group_type,
-            'parent_group': parent_group,
-            'present_on_rdm_bool': True
-        }
-    logging.info(teams_dict)
-    return teams_dict
-
-def return_products_dict():
-    response = rdm_scraper.call_riotorg('products')
-    logging.info('Products Dictionary')
-
-    rdm_dict = products_owner_crawl(response)
-    logging.debug(response['debug'])
-    
-    products_dict = {}
-    for rdm_rrn in rdm_dict:
-        product = rdm_dict[rdm_rrn]
-        data = product['data']
-        created_at = product['created_at']
-        last_updated_at = product['updated_at']
-        version = product['version']
-        fullname = data['name']
-        email_contact = data.get('email', '')
-        slack = data.get('slack', '')
-        slack_url = f'https://riotgames.slack.com/archives/{slack}'
-        slack_string = f'{slack}'
-        slack_contact = slack
-        if slack_contact:
-            slack_md = f'[{slack_string}]({slack_url})'
-        else:
-            slack_md = ''
-        pager_duty = data.get('pager_duty', '')
-        riotorg_url = f'https://org.riotnet.io/product/{rdm_rrn}'
-        product_url = product.get('product_url', '')
-        description = data['description']
-        product_type = product.get('type', 'Unknown')
-        parent_rdm_rrns = product['owned_by']
-        
-        status = data.get('status', None)
 
 
-        products_dict[rdm_rrn] = {
-            'rdm_rrn': rdm_rrn,
-            'created_at': created_at,
-            'last_updated_at': last_updated_at,
-            'version': version,
-            'Product Name': fullname,
-            'Type': product_type,
-            'Brief Description': description,
-            'Homepage': product_url,
-            'Email': email_contact,
-            'slack_url': slack_url,
-            'slack_string': slack_string,
-            'Slack': slack_md,
-            'slack_contact': slack_contact,
-            'Pager Duty': pager_duty,
-            'Status': status,
-            'Riot Org URL (Click to Edit Record)': riotorg_url,
-            'parent_groups': parent_rdm_rrns,
-            'present_on_rdm_bool': True,
-            'status': status
-        }
-    logging.info(products_dict)
-    return(products_dict)
+def write_to_csv(title, list):
+    df = pandas.DataFrame(list)
+    df.to_csv(f'./src/validation_files/{current_date}_{title}.csv', index=False)
+
+
+
+def return_rdm_teams_dict(teams_dict):
+    return_dict = {}
+
+    for workday_id in teams_dict:
+        team_obj = teams_dict[workday_id]
+        rdm_rrn = team_obj.data_transformed['rdm_rrn']
+        return_dict[rdm_rrn] = team_obj
+
+    return return_dict
 
 def add_notion_uuids_to_dict(view, teams_dict):
     rows = view.collection.get_rows()
     if rows:
         for row in rows:
             properties = row.get_all_properties()
-            rdm_rrn = properties['rdm_rrn']
-            group = teams_dict[rdm_rrn]
+            workday_id = properties['workdayID']
+            group = teams_dict[workday_id]
             uuid = row.id
             group['notion_uuid'] = uuid
     else:
@@ -304,227 +60,386 @@ def add_notion_uuids_to_dict(view, teams_dict):
         logging.exception('TOKEN RESET REQUIRED')
         raise Exception
 
-def set_page_properties(page, properties_list, properties_dictionary, rdm_entry):
+def get_notion_meta_data(notion_page, rdm_obj):
     try:
+        notion_uuid = notion_page.id
+        notion_title = notion_page.title_plaintext
+        rdm_obj.notion_uuid = notion_uuid
+        rdm_obj.notion_title = notion_title
+    except:
+        raise Exception
+
+def set_page_properties(page, properties_list, properties_dictionary, rdm_obj, dry_run_bool):
+    try:
+        get_notion_meta_data(page, rdm_obj)
+        rdm_obj.page_properties_set_bool = False
         for property in properties_list:
             try:
+                rdm_entry = rdm_obj.data_transformed
+                if dry_run_bool:
+                    change_list = [property, rdm_entry[property]]
+                    rdm_obj.dry_run_change_list.append(change_list)
+                    continue
                 page.set_property(properties_dictionary[property], rdm_entry[property])
             except Exception as e:
                 print(e)
                 if "520 Server Error" in str(e):
                     page.set_property(properties_dictionary[property], rdm_entry[property])
                 else:
+                    logging.error(f' for notion page id: {page.id}, property: {property}.')
                     raise Exception
+        rdm_obj.page_properties_set_bool = True
         return True
     except Exception as e:
+        print('Error')
         print(e)
         raise Exception
 
-def update_page_properties(page, properties_list, properties_dictionary, rdm_entry):
+def update_page_properties(page, properties_list, properties_dictionary, rdm_obj, dry_run_bool):
     try:
+        get_notion_meta_data(page, rdm_obj)
+        rdm_obj.page_properties_set_bool = False
         for property in properties_list:
+            
             property_value = page.get_property(properties_dictionary[property])
+            rdm_entry = rdm_obj.data_transformed
             if property_value == rdm_entry[property]:
-                print(f'Property not updated: {property}.')
+                #print(f'Property not updated: {property}.')
                 continue
             else:
                 try:
+                    if dry_run_bool:
+                        change_list = [property, rdm_entry[property]]
+                        rdm_obj.dry_run_change_list.append(change_list)
+                        continue
                     page.set_property(properties_dictionary[property], rdm_entry[property])
+                    print(f'Property set: {property}.')
                 except Exception as e:
-                    print(e)
+                    print(f'printing error: {e}')
                     if "520 Server Error" in str(e):
                         page.set_property(properties_dictionary[property], rdm_entry[property])
                     else:
                         raise Exception
+        rdm_obj.page_properties_set_bool = True
         return True
     except Exception as e:
-        print(e)
+        print(f'printing error: {e}')
         raise Exception
 
-def update_current_rows_teams(teams_dict, teams_properties_dict, current_rows):
-    #tracks which rdm_rrns have been processed
+def set_active_to_false(page, properties_dictionary):
+    try:
+        page.set_property(properties_dictionary['Active'], 'False')
+    except Exception as e:
+        print(e)
+        if "520 Server Error" in str(e):
+            page.set_property(properties_dictionary['Active'], 'False')
+        else:
+            logging.error(f'Unable to set Active to False for page: {BASE_URL + page.id}')
+            raise Exception
+
+def update_current_rows_teams(teams_dict, teams_properties_dict, current_rows, dry_run_obj):
+    #tracks which workday ids have been processed
     tracking_dict = {}
-    for rdm_rrn in teams_dict:
-        tracking_dict[rdm_rrn] = False
+    for workday_id in teams_dict:
+        tracking_dict[workday_id] = False
 
     # iterate over current pages and update values
-    def map_current_rows(row):
-        rdm_rrn = row.get_property(teams_properties_dict['rdm_rrn'])
-        if not rdm_rrn:
-            return
-        print(f'updating team {rdm_rrn}')
-        if rdm_rrn == 'ROOT':
-            teams_dict['ROOT'] = {'notion_uuid': row.id}
-            return
-        team = teams_dict[rdm_rrn]
+    #def map_current_rows(row):
+    for row in current_rows:
+        workday_id = row.get_property(teams_properties_dict['workdayID'])
+        if not workday_id:
+            #return
+            continue
+        
+        if workday_id == 'ROOT':
+            uuid = row.id
+            data = {
+                'notion_uuid': uuid,
+                'parent_group': None,
+                'Team Name': 'Riot Games',
+                'scope': 'riot',
+                'Type': 'Company'
+            }
+            team_obj = rdm_obj(data)
+            team_obj.notion_uuid = uuid
+            teams_dict['ROOT'] = team_obj
+            continue
+            #return
+        try:
+            team_obj = teams_dict[workday_id]
+        except:
+            if dry_run_obj.dry_run_bool:
+                title = row.title_plaintext
+                notion_url = BASE_URL + row.id
+                property = 'Active'
+                change = 'False'
+                dry_run_obj.append_entry([title, notion_url, property, change])
+            set_active_to_false(row, teams_properties_dict)
+            continue
+            #return
+        team = team_obj.data_transformed
+        print(f'updating team {team['Team Name']}')
         if team['Team Name'] == 'REDACTED':
-            return
-        tracking_dict[rdm_rrn] = update_page_properties(
+            continue
+            #return
+        if dry_run_obj.dry_run_bool:
+            team_obj.dry_run_change_list = []
+        tracking_dict[workday_id] = update_page_properties(
             row,
             TEAMS_COLUMNS_ITERATOR, 
             teams_properties_dict,
-            teams_dict[rdm_rrn]
+            team_obj,
+            dry_run_obj.dry_run_bool
         )
-        team['notion_uuid'] = row.id
+        team['notion_uuid'] = team_obj.notion_uuid
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
-        executor.map(map_current_rows, current_rows)
+    #with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+        #executor.map(map_current_rows, current_rows)
     
     return tracking_dict
 
-def create_new_teams_pages(view, teams_dict, teams_properties_dict, tracking_dict):
-    # iterate over every rdm_rrn that is false in the tracking dictionary 
+def create_new_teams_pages(view, teams_dict, teams_properties_dict, tracking_dict, dry_run_obj):
+    # iterate over every workday id that is false in the tracking dictionary 
     # and create a new page
-    def map_teams_dict(rdm_rrn):
-    #for rdm_rrn in teams_dict:
-        if not tracking_dict[rdm_rrn]:
-            team = teams_dict[rdm_rrn]
+    #def map_teams_dict(workday_id):
+    for workday_id in teams_dict:
+        if not tracking_dict[workday_id]:
+            team_obj = teams_dict[workday_id]
+            team = team_obj.data_transformed
             if team['Team Name'] == 'REDACTED':
-                return
-            print(f'creating team {rdm_rrn}')
-            new_row = view.collection.add_row()
-            tracking_dict[rdm_rrn] = set_page_properties(
+                continue
+                #return
+            print(f'creating team {team['Team Name']}')
+            if dry_run_obj.dry_run_bool:
+                team_obj.dry_run_change_list = []
+            if not dry_run_obj.dry_run_bool:
+                new_row = view.collection.add_row()
+            else:
+                new_row = None
+            tracking_dict[workday_id] = set_page_properties(
                 new_row,
                 TEAMS_COLUMNS_ITERATOR, 
                 teams_properties_dict, 
-                teams_dict[rdm_rrn]
+                team_obj,
+                dry_run_obj.dry_run_bool
             )
-            team['notion_uuid'] = new_row.id
-    with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
-        executor.map(map_teams_dict, tracking_dict)
+            team['notion_uuid'] = team_obj.notion_uuid
 
-def map_teams_hierarchy(teams_dict, teams_properties_dict, current_rows):
+    #with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+        #executor.map(map_teams_dict, tracking_dict)
+
+def map_teams_hierarchy(teams_dict, teams_properties_dict, current_rows, dry_run_obj):
     def map_hierarchy(row):
     #for row in current_rows:
-        rdm_rrn = row.get_property(teams_properties_dict['rdm_rrn'])
-        if not rdm_rrn or rdm_rrn == 'ROOT':
+        workday_id = row.get_property(teams_properties_dict['workdayID'])
+        if not workday_id or workday_id == 'ROOT':
             #continue
             return
-        team = teams_dict[rdm_rrn]
-        parent_team_rdm_rrn = team['parent_group']
-        if parent_team_rdm_rrn:
-            parent_team = teams_dict[parent_team_rdm_rrn]
+        team_obj = teams_dict[workday_id]
+        team = team_obj.data_transformed
+        parent_team_workday_id = team['parent_group']
+        if parent_team_workday_id:
+            parent_team_obj = teams_dict[parent_team_workday_id]
+            parent_team = parent_team_obj.data_transformed
+            if parent_team['Team Name'] == 'REDACTED':
+                #continue
+                return
             parent_team_notion_uuid = parent_team['notion_uuid']
             current_parent = row.get_property(teams_properties_dict['Parent'])
-            current_parent_notion_uuid = current_parent[0].id
+            try:
+                current_parent_notion_uuid = current_parent[0].id
+            except:
+                current_parent_notion_uuid = None
             if parent_team_notion_uuid == current_parent_notion_uuid:
                 #continue
                 return
-            elif parent_team['Team Name'] == 'REDACTED':
-                #continue
-                return
             else:
+                if dry_run_obj.dry_run_bool:
+                    if not hasattr(team_obj, 'dry_run_change_list'):
+                        team_obj.dry_run_change_list = []
+                    change_list = ['Parent', parent_team['Team Name']]
+                    team_obj.dry_run_change_list.append(change_list)
+                    if not hasattr(team_obj, 'title'):
+                        team_obj.title = row.title_plaintext
+                    return
                 print(f'mapping teams: {team['Team Name']} to {parent_team['Team Name']}')
                 row.set_property(teams_properties_dict['Parent'], parent_team['notion_uuid'])
         else:
-            root = teams_dict['ROOT']
+            root_obj = teams_dict['ROOT']
+            root = root_obj.data_transformed
+            if dry_run_obj.dry_run_bool:
+                if not hasattr(team_obj, 'dry_run_change_list'):
+                    team_obj.dry_run_change_list = []
+                change_list = ['Parent', 'ROOT']
+                team_obj.dry_run_change_list.append(change_list)
+                if not hasattr(team_obj, 'title'):
+                    team_obj.title = row.title_plaintext
+                return
             print(f'mapping {team['Full Name']} to ROOT')
             row.set_property(teams_properties_dict['Parent'], root['notion_uuid'])
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
         executor.map(map_hierarchy, current_rows)
 
-def update_teams(view, teams_dict):  
+def dry_run_append_dict(dry_run_obj, teams_or_products_dict):
+    for rdm_rrn in teams_or_products_dict:
+        rdm_obj = teams_or_products_dict[rdm_rrn]
+        teams_data = rdm_obj.data_transformed
+        try:
+            title = teams_data['Team Name']
+            if not hasattr(rdm_obj, 'notion_uuid'):
+                continue
+            notion_url = f'{BASE_URL}+{rdm_obj.notion_uuid}'
+        except:
+            continue
+        if hasattr(rdm_obj, 'dry_run_change_list'):
+            if rdm_obj.dry_run_change_list:
+                for elem in rdm_obj.dry_run_change_list:
+                    property = elem[0]
+                    change = elem[1]
+                    new_row = [title, notion_url, property, change]
+                    dry_run_obj.append_entry(new_row)
+    title = 'dry run changes'
+    write_to_csv(title, dry_run_obj.changes_list)
+
+def update_teams(view, teams_dict, dry_run_obj):
     teams_properties_dict = return_properties(view, TEAMS_COLUMNS, skip=True)
     current_rows = view.collection.get_rows()
     
     #update current pages and create new pages as needed
-    tracking_dict = update_current_rows_teams(teams_dict, teams_properties_dict, current_rows)
-    create_new_teams_pages(view, teams_dict, teams_properties_dict, tracking_dict)
+    tracking_dict = update_current_rows_teams(teams_dict, teams_properties_dict, current_rows, dry_run_obj)
+    create_new_teams_pages(view, teams_dict, teams_properties_dict, tracking_dict, dry_run_obj)
 
     # reinitialize current_rows and teams_properties_dict
     teams_properties_dict = return_properties(view, TEAMS_COLUMNS)
     current_rows = view.collection.get_rows()
-    map_teams_hierarchy(teams_dict, teams_properties_dict, current_rows)
+    map_teams_hierarchy(teams_dict, teams_properties_dict, current_rows, dry_run_obj)
 
-def update_current_products(products_dict, products_properties_dict, current_rows):
+def update_current_products(products_dict, products_properties_dict, current_rows, dry_run_obj):
     tracking_dict = {}
 
     for rdm_rrn in products_dict:
         tracking_dict[rdm_rrn] = False
 
     print(f'Updating existing products')
-    def map_current_rows(row):
-    #for row in current_rows:
+    #def map_current_rows(row):
+    for row in current_rows:
         rdm_rrn = row.get_property(products_properties_dict['rdm_rrn'])
-        if not rdm_rrn or rdm_rrn in EXCLUDE_LIST:
-            #continue
-            return
-        print(f'updating product {rdm_rrn}')
-        product = products_dict[rdm_rrn]
+        title = row.title_plaintext
+        if not rdm_rrn:
+            continue
+            #return
+        try:
+            product_obj = products_dict[rdm_rrn]
+        except:
+            if dry_run_obj.dry_run_bool:
+                title = row.title_plaintext
+                notion_url = BASE_URL + row.id
+                property = 'Active'
+                change = 'False'
+                dry_run_obj.append_entry([title, notion_url, property, change])
+            set_active_to_false(row, products_properties_dict)
+            continue
+            #return
+        
+        product = product_obj.data_transformed
+        #print(f'updating product {rdm_rrn}')
         if product['Product Name'] == 'REDACTED':
-            #continue
-            return
+            continue
+            #return
+        if dry_run_obj.dry_run_bool:
+            product_obj.dry_run_change_list = []
         tracking_dict[rdm_rrn] = update_page_properties(
             row,
             PRODUCTS_COLUMNS_ITERATOR, 
             products_properties_dict,
-            products_dict[rdm_rrn]
+            product_obj,
+            dry_run_obj.dry_run_bool
         )
-        product['notion_uuid'] = row.id
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
-        executor.map(map_current_rows, current_rows)
+        product['notion_uuid'] = product_obj.notion_uuid
+
+    #with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+        #executor.map(map_current_rows, current_rows)
 
     return tracking_dict
 
-def creat_new_products_pages(view, products_dict, products_properties_dict, tracking_dict):
+def create_new_products_pages(view, products_dict, products_properties_dict, tracking_dict, dry_run_obj):
     # iterate over every rdm_rrn that is false in the tracking dictionary 
     # and create a new page
     print(f'Creating new products.')
-    def map_products_dict(rdm_rrn):
+    #def map_products_dict(rdm_rrn):
+    for rdm_rrn in products_dict:
         if not tracking_dict[rdm_rrn]:
-            product = products_dict[rdm_rrn]
+            product_obj = products_dict[rdm_rrn]
+            product = product_obj.data_transformed
             if product['Product Name'] == 'REDACTED':
-                return
+                continue
+                #return
             print(f'creating product {rdm_rrn}')
-            new_row = view.collection.add_row()
+            if dry_run_obj.dry_run_bool:
+                product_obj.dry_run_change_list = []
+            if not dry_run_obj.dry_run_bool:
+                new_row = view.collection.add_row()
+            else:
+                new_row = None
             tracking_dict[rdm_rrn] = set_page_properties(
                 new_row,
                 PRODUCTS_COLUMNS_ITERATOR, 
                 products_properties_dict, 
-                products_dict[rdm_rrn]
+                product_obj,
+                dry_run_obj.dry_run_bool
             )
-            product['notion_uuid'] = new_row.id
+            product['notion_uuid'] = product_obj.notion_uuid
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
-        executor.map(map_products_dict, products_dict)
+    #with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+        #executor.map(map_products_dict, tracking_dict)
 
-def map_products_hierarchy(products_dict, products_properties_dict, current_rows, teams_dict):
-    def map_hierarchy(row):
-    #for row in current_rows:
+def map_products_hierarchy(products_dict, products_properties_dict, current_rows, teams_dict, dry_run_obj):
+    #def map_hierarchy(row):
+    for row in current_rows:
         rdm_rrn = row.get_property(products_properties_dict['rdm_rrn'])
-        if not rdm_rrn or rdm_rrn in EXCLUDE_LIST:
-            #continue
-            return
-        print(f'mapping {rdm_rrn}')
-        product = products_dict[rdm_rrn]
-        parent_team_rdm_rrns = product['parent_groups']
+        if not rdm_rrn:
+            continue
+            #return
+
+        product_obj = products_dict[rdm_rrn]
+        product = product_obj.data_transformed
+        print(f'mapping {product['Product Name']}')
+        parent_team_workday_ids = product['owning_group_workday_ids']
+
         parent_team_notion_uuids = []
-        for rdm_rrn in parent_team_rdm_rrns:
-            team = teams_dict[rdm_rrn]
-            notion_uuid = team['notion_uuid']
-            parent_team_notion_uuids.append(notion_uuid)
+        for workday_id in parent_team_workday_ids:
+            try:
+                team_obj = teams_dict[workday_id]
+                team = team_obj.data_transformed
+            except:
+                continue
+            try:
+                notion_uuid = team_obj.notion_uuid
+                parent_team_notion_uuids.append(notion_uuid)
+            except:
+                continue
+        
         if parent_team_notion_uuids:
             print(f'mapping product {product['Product Name']} to team {team['Team Name']}')
             row.set_property(products_properties_dict['Owning Team(s)'], parent_team_notion_uuids)
-        print(f'Finished mapping {rdm_rrn}')
+        print(f'Finished mapping {product['Product Name']}')
+    
     print(f'DONE MAPPPING TEAMS')
-    with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
-        executor.map(map_hierarchy, current_rows)
+    #with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+        #executor.map(map_hierarchy, current_rows)
 
-def update_products(view, products_dict, teams_dict):
+def update_products(view, products_dict, teams_dict, dry_run_obj):
     products_properties_dict = return_properties(view, PRODUCTS_COLUMNS, skip=False)
     current_rows = view.collection.get_rows()
 
-    tracking_dict = update_current_products(products_dict, products_properties_dict, current_rows)
-    creat_new_products_pages(view, products_dict, products_properties_dict, tracking_dict)
+    tracking_dict = update_current_products(products_dict, products_properties_dict, current_rows, dry_run_obj)
+    create_new_products_pages(view, products_dict, products_properties_dict, tracking_dict, dry_run_obj)
 
     # reinitialize current_rows and products_properties_dict
     products_properties_dict = return_properties(view, PRODUCTS_COLUMNS)
     current_rows = view.collection.get_rows()
-    map_products_hierarchy(products_dict, products_properties_dict, current_rows, teams_dict)
-
+    map_products_hierarchy(products_dict, products_properties_dict, current_rows, teams_dict, dry_run_obj)
 
 # old code, not sure if needed any more. Almost certainly outdated.
 def map_product_owning_teams(teams_view, products_view, products_dict):
@@ -565,7 +480,148 @@ def map_product_owning_teams(teams_view, products_view, products_dict):
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
         executor.map(map_product_rows, products_rows)
 
-def update_relations(use_prod_or_dev):
+def set_owning_property(page, owning_uuid, property_name, properties_dict):
+    try:
+        page.set_property(properties_dict[property_name], owning_uuid)
+    except Exception as e:
+        print(f'printing error: {e}')
+        if "520 Server Error" in str(e):
+            page.set_property(properties_dict[property_name], owning_uuid)
+        else:
+            raise Exception
+
+def return_notion_uuid(owning_type, team, teams_dict):
+    if owning_type == 'Owning Business Unit':
+        exclude = ['Studio', 'Pillar', 'Company', 'Business Unit']
+    else:
+        exclude = ['Studio', 'Pillar', 'Company', 'Business Unit', 'Initiative']
+
+    team_type = team['Type']
+
+    if team_type in exclude:
+        return None
+    else:
+        owning_workday_id = team[owning_type]
+        try:
+            owning_obj = teams_dict[owning_workday_id]
+        except:
+            return None
+        owning_data = owning_obj.data_transformed
+        owning_uuid = owning_data['notion_uuid']
+
+        return owning_uuid
+
+def dry_run_relations(dry_run_obj, row, owning_bu_notion_uuid, owning_initiative_notion_uuid):
+    notion_title = row.title_plaintext
+    notion_url = row.get_browseable_url()
+    if owning_bu_notion_uuid:
+        property_changed = 'Owning Business Unit'
+        changes_list = [notion_title, notion_url, property_changed, owning_bu_notion_uuid]
+        dry_run_obj.append_entry(changes_list)
+    if owning_initiative_notion_uuid:
+        property_changed = 'Owning Initiative'
+        changes_list = [notion_title, notion_url, property_changed, owning_initiative_notion_uuid]
+        dry_run_obj.append_entry(changes_list)
+
+def new_update_relations(teams_dict, teams_view, products_dict, products_view, dry_run_obj):
+    teams_properties = return_properties(teams_view, TEAMS_COLUMNS)
+    products_properties = return_properties(products_view, PRODUCTS_COLUMNS)
+
+    
+    bu = 'Business Unit'
+    initiative = 'Initiative'
+    owning_bu_str = 'Owning Business Unit'
+    owning_initiative_str = 'Owning Initiative'
+    owning_teams_str = 'Owning Team(s)'
+
+    teams_current_rows = teams_view.collection.get_rows()
+
+    #def map_teams_owners(row):
+    for row in teams_current_rows:
+        workday_id = row.get_property(teams_properties['workdayID'])
+        if not workday_id:
+            continue
+            #return
+        try:
+            team_obj = teams_dict[workday_id]
+            team = team_obj.data_transformed
+        except:
+            continue
+            #return
+        
+        owning_bu_notion_uuid = return_notion_uuid(owning_bu_str, team, teams_dict)
+        owning_initiative_notion_uuid = return_notion_uuid(owning_initiative_str, team, teams_dict)
+
+        if not owning_bu_notion_uuid and not owning_initiative_notion_uuid:
+            continue
+            #return
+
+        if dry_run_obj.dry_run_bool:
+            dry_run_relations(dry_run_obj, row, owning_bu_notion_uuid, owning_initiative_notion_uuid)
+            continue
+            #return
+        
+        if owning_bu_notion_uuid:
+            set_owning_property(row, owning_bu_notion_uuid, owning_bu_str, teams_properties)
+        if owning_initiative_notion_uuid:
+            set_owning_property(row, owning_initiative_notion_uuid, owning_initiative_str, teams_properties)
+    
+    products_current_rows = products_view.collection.get_rows()
+
+    for row in products_current_rows:
+        rdm_rrn = row.get_property(products_properties['rdm_rrn'])
+        if not rdm_rrn or rdm_rrn == 'ROOT':
+            continue
+            #return
+        
+        try:
+            product_obj = products_dict[rdm_rrn]
+            product = product_obj.data_transformed
+        except:
+            continue
+            #return
+        
+        owning_team_workday_ids = product['Owning Group Workday ID']
+        owning_bu_notion_uuids = []
+        owning_initiative_notion_uuids = []
+
+        for workday_id in owning_team_workday_ids:
+            try:
+                team_obj = teams_dict[workday_id]
+                team = team_obj.data_transformed
+            except:
+                continue
+            
+            try:
+                owning_team_notion_uuid = team['notion_uuid']
+            except:
+                print(f'Notion UUID lookup failed for {team['Team Name']}')
+                owning_team_notion_uuid = team_obj.associated_page.id
+            
+            owning_bu_notion_uuid = return_notion_uuid(owning_bu_str, team, teams_dict)
+            if owning_bu_notion_uuid:
+                owning_bu_notion_uuids.append(owning_bu_notion_uuid)
+            
+            owning_initiative_notion_uuid = return_notion_uuid(owning_initiative_str, team, teams_dict)
+            if owning_initiative_notion_uuid:
+                owning_initiative_notion_uuids.append(owning_initiative_notion_uuid)
+
+        if not owning_bu_notion_uuids and not owning_initiative_notion_uuids:
+            continue
+
+        if dry_run_obj.dry_run_bool:
+            dry_run_relations(dry_run_obj, row, owning_bu_notion_uuids, owning_initiative_notion_uuids)
+
+        if owning_team_notion_uuid:
+            set_owning_property(row, owning_team_notion_uuid, owning_teams_str, products_properties)    
+        if owning_bu_notion_uuids:
+            set_owning_property(row, owning_bu_notion_uuids, owning_bu_str, products_properties)
+        if owning_initiative_notion_uuids:
+            set_owning_property(row, owning_initiative_notion_uuids, owning_initiative_str, products_properties)
+
+# old update_relations
+"""
+def update_relations(use_prod_or_dev, dry_run_bool=True):
     view_dict = use_prod_or_dev_dbs(use_prod_or_dev)
     TEAMS_COLLECTION_VIEW = view_dict['TEAMS_VIEW']
     PRODUCTS_COLLECTION_VIEW = view_dict['PRODUCTS_VIEW']
@@ -722,33 +778,45 @@ def update_relations(use_prod_or_dev):
             return
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
         executor.map(map_rows, products_rows)
+"""
 
-def update_pages(use_prod_or_dev):
+def update_pages(use_prod_or_dev, dry_run_bool=True):
     #retrive collection ids for prod or dev
     view_dict = use_prod_or_dev_dbs(use_prod_or_dev)
     TEAMS_COLLECTION_VIEW = view_dict['TEAMS_VIEW']
     PRODUCTS_COLLECTION_VIEW = view_dict['PRODUCTS_VIEW']
 
+    dry_run_obj = dry_run(dry_run_bool)
+
     print('updating teams')
     teams_view = CLIENT.get_collection_view(BASE_URL + TEAMS_COLLECTION_VIEW)
-    #verify that breaking changes have not been made to column names
     column_test(teams_view, TEAMS_COLUMNS)
+
+    #todo make this explicitly named to indicate that it's querying RDM
     teams_dict = return_teams_dict()
-    update_teams(teams_view, teams_dict)
+    update_teams(teams_view, teams_dict, dry_run_obj)
 
     print('updating products')
     products_view = CLIENT.get_collection_view(BASE_URL + PRODUCTS_COLLECTION_VIEW)
     #verify that breaking changes have not been made to column names
     column_test(products_view, PRODUCTS_COLUMNS)
-    products_dict = return_products_dict()
-    update_products(products_view, products_dict, teams_dict)
+    products_dict = return_products_dict(teams_dict)
+    update_products(products_view, products_dict, teams_dict, dry_run_obj)
+
+    print('updating relations')
+    # reinitialize teams and products views
+    teams_view = CLIENT.get_collection_view(BASE_URL + TEAMS_COLLECTION_VIEW)
+    products_view = CLIENT.get_collection_view(BASE_URL + PRODUCTS_COLLECTION_VIEW)
+
+    file_name = 'teams_and_products.pj'
+    files_list = [teams_dict, products_dict]
+    pickle_dictionary(files_list, file_name)
+
+    new_update_relations(teams_dict, teams_view, products_dict, products_view, dry_run_obj)
+
     print('done')
 
-def write_to_csv(title, list):
-    df = pandas.DataFrame(list)
-    df.to_csv(f'./src/validation_files/{current_date}_{title}.csv', index=False)
-
-def validtate_notion_teams(TEAMS_COLLECTION_VIEW):
+def validate_notion_teams(TEAMS_COLLECTION_VIEW):
     teams_view = CLIENT.get_collection_view(BASE_URL + TEAMS_COLLECTION_VIEW)
     print('starting teams_view')
     teams_view_list = []
@@ -818,15 +886,18 @@ def validate_rdm_teams():
     teams_dict = return_teams_dict()
     rdm_teams_list = []
     rdm_teams_headers = []
-    for rdm_rrn in teams_dict:
-        for key in teams_dict[rdm_rrn]:
+    for workday_id in teams_dict:
+        teams_obj = teams_dict[workday_id]
+        data = teams_obj.data_transformed
+        for key in data:
             rdm_teams_headers.append(key)
         break
     
     rdm_teams_list.append(rdm_teams_headers)
 
-    for rdm_rrn in teams_dict:
-        team = teams_dict[rdm_rrn]
+    for workday_id in teams_dict:
+        teams_obj = teams_dict[workday_id]
+        team = teams_obj.data_transformed
         values = []
         for key in rdm_teams_headers:
             values.append(team[key])
@@ -837,20 +908,25 @@ def validate_rdm_teams():
     title = 'teams_rdm'
     write_to_csv(title, rdm_teams_list)
 
-def validate_rdm_products():
-    products_dict = return_products_dict()
+    return teams_dict
+
+def validate_rdm_products(teams_dict):
+    products_dict = return_products_dict(teams_dict)
 
     rdm_products_list = []
     rdm_products_headers = []
     for rdm_rrn in products_dict:
-        for key in products_dict[rdm_rrn]:
+        products_obj = products_dict[rdm_rrn]
+        data = products_obj.data_transformed
+        for key in data:
             rdm_products_headers.append(key)
         break
     
     rdm_products_list.append(rdm_products_headers)
 
     for rdm_rrn in products_dict:
-        product = products_dict[rdm_rrn]
+        products_obj = products_dict[rdm_rrn]
+        product = products_obj.data_transformed
         values = []
         for key in rdm_products_headers:
             values.append(product[key])
@@ -866,21 +942,123 @@ def validation(use_prod_or_dev):
     PRODUCTS_COLLECTION_VIEW = view_dict['PRODUCTS_VIEW']
 
     # generate csv for teams view
-    validtate_notion_teams(TEAMS_COLLECTION_VIEW)
+    validate_notion_teams(TEAMS_COLLECTION_VIEW)
 
     # generate csv for rdm groups
-    validate_rdm_teams()
+    teams_dict = validate_rdm_teams()
 
     # generate csv for products view
     validate_notion_products(PRODUCTS_COLLECTION_VIEW)
 
     # generate csv for rdm products
-    validate_rdm_products()
+    validate_rdm_products(teams_dict)
+
+def rdm_teams_dict_return():
+    response = call_riotorg('rdm_teams')
+    data = response['graphql']['group']
+
+    PRODUCTS_OWNING_TEAM_URL_PREFIX = 'https://teams.riotgames.com/teams/'
+
+    return_dict = {}
+
+    for group in data:
+        rdm_rrn = group['_rdm_rrn']
+        scope = group['scope']
+        scope = scope.replace('riot.', '')
+
+        return_dict[rdm_rrn] = scope
+    
+    return return_dict
+
+def relate_rrns_to_workday_ids(use_prod_or_dev):
+    #retrive collection ids for prod or dev
+    view_dict = use_prod_or_dev_dbs(use_prod_or_dev)
+    TEAMS_COLLECTION_VIEW = view_dict['TEAMS_VIEW']
+
+    teams_dict = return_teams_dict()
+    rdm_teams_dict = rdm_teams_dict_return()
+
+
+    teams_view = CLIENT.get_collection_view(BASE_URL + TEAMS_COLLECTION_VIEW)
+    teams_properties_dict = return_properties(teams_view, TEAMS_COLUMNS, skip=True)
+
+    teams_current_rows = teams_view.collection.get_rows()
+
+    match_count = 0
+    no_match_count = 0
+    war_scope_dict = {}
+    war_name_dict = {}
+
+    for workday_id in teams_dict:
+        team_obj = teams_dict[workday_id]
+        data = team_obj.data_transformed
+
+        war_scope = data['scope']
+        war_name = data['Team Name']
+
+        war_scope_dict[war_scope] = team_obj
+        war_name_dict[war_name] = team_obj
+
+
+
+
+    rdm_no_match_count = 0
+    war_no_match_count = 0
+
+    for row in teams_current_rows:
+        rdm_rrn = row.get_property(teams_properties_dict['rdm_rrn'])
+        title = row.title_plaintext
+        try:
+            rdm_scope = rdm_teams_dict[rdm_rrn]
+        except:
+            print(f'rdm_rrn not found for {title}')
+            rdm_no_match_count += 1
+            continue
+
+        try:
+            team_obj = war_scope_dict[rdm_scope]
+            data = team_obj.data_transformed
+            workday_id = data['workdayID']
+        except:
+            print(f'Scope not found in {title}. Trying by name.')
+            try:
+                team_obj = war_name_dict[title]
+                data = team_obj.data_transformed
+                workday_id = data['workdayID']
+            except:
+                print(f'Name not found for {title}.')
+                war_no_match_count += 1
+                continue
+        
+        print(f'settinging workdayID: {workday_id} for {title}.')
+        row.set_property(teams_properties_dict['workdayID'], workday_id)
+    
+    print(rdm_no_match_count)
+    print(war_no_match_count)
+
+def test(use_prod_or_dev):
+    view_dict = use_prod_or_dev_dbs(use_prod_or_dev)
+    PRODUCTS_COLLECTION_VIEW = view_dict['PRODUCTS_VIEW']
+
+    products_view = CLIENT.get_collection_view(BASE_URL + PRODUCTS_COLLECTION_VIEW)
+    products_properties_dict = return_properties(products_view, PRODUCTS_COLUMNS, skip=False)
+
+    current_rows = products_view.collection.get_rows()
+
+    def set_rows(row):
+        value = row.get_property(products_properties_dict['Pager Duty'])
+        if value == 'a':
+            print(value)
+            row.set_property(products_properties_dict['Pager Duty'], '')
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+        executor.map(set_rows, current_rows)
 
 def main():
     use_prod_or_dev = 'DEV'
-    #update_pages(use_prod_or_dev)
-    update_relations(use_prod_or_dev)
+    dry_run_bool = False
+    #relate_rrns_to_workday_ids(use_prod_or_dev)
+    update_pages(use_prod_or_dev, dry_run_bool)
     #validation(use_prod_or_dev)
 
 if __name__ == '__main__':

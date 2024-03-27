@@ -1,10 +1,13 @@
 src/__pycache__*
 src/validation_files*
+src/canary.py
+src/pickle_jars.py
+src/pickle_jars*
 
 logs
 logs/*
 
 src/rdm_secrets.py
 src/notion_secrets.py
-log_2024-02-14.log
 src/new_test.py
+src/rdm_sync*
