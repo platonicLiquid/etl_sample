@@ -11,3 +11,5 @@ src/rdm_secrets.py
 src/notion_secrets.py
 src/new_test.py
 src/rdm_sync*
+src/testing_relations.py
+src/delete_all_db_rows.py

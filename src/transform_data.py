@@ -5,7 +5,7 @@ from datetime import date, time
 #local imports
 import group_column_mapping
 import product_column_mapping
-from rdm_classes import rdm_obj
+from classes import data_obj
 
 # static strings
 GROUPS_URL_PREFIX = 'https://org.riotnet.io/teams/'
@@ -20,6 +20,9 @@ logging.basicConfig(
         level=logging.DEBUG
     )
 
+#globals
+owning_initative_str = 'Owning Initiative'
+owning_bu_str = 'Owning Business Unit'
 
 # universal functions
 def map_data_to_notion_columns(dict_to_map, data_schema_dict):
@@ -148,7 +151,7 @@ def format_data(transformed_data):
     for workday_id in transformed_data:
         data = transformed_data[workday_id]
         data['Active?'] = 'Active'
-        team_obj = rdm_obj(data, 'workdayID')
+        team_obj = data_obj(data, 'workdayID')
         if data['Slack']:
             data['Slack'] = format_slack_string(data['Slack'])
         if data['Support Channels']:
@@ -200,7 +203,7 @@ def find_bu(team, teams_dict):
 
     parent_workday_id = team['parent_group']
     try:
-        parent_obj = teams_dict[parent_obj]
+        parent_obj = teams_dict[parent_workday_id]
         parent = parent_obj.data_transformed
         parent_type = parent['Type']
     except:
@@ -210,7 +213,7 @@ def find_bu(team, teams_dict):
     if parent_type == 'Business Unit':
         return parent_workday_id
     else:
-        parent_workday_id = find_bu(parent)
+        parent_workday_id = find_bu(parent, teams_dict)
         return parent_workday_id
 
 def find_initiative(team, teams_dict):
@@ -218,7 +221,7 @@ def find_initiative(team, teams_dict):
 
     parent_workday_id = team['parent_group']
     try:
-        parent_obj = teams_dict[parent_obj]
+        parent_obj = teams_dict[parent_workday_id]
         parent = parent_obj.data_transformed
         parent_type = parent['Type']
     except:
@@ -228,7 +231,7 @@ def find_initiative(team, teams_dict):
     if parent_type == 'Initiative':
         return parent_workday_id
     else:
-        parent_workday_id = find_bu(parent)
+        parent_workday_id = find_initiative(parent, teams_dict)
         return parent_workday_id
 
 def teams_bu_and_initiative_crawl(teams_dict):
@@ -238,13 +241,13 @@ def teams_bu_and_initiative_crawl(teams_dict):
         team = team_obj.data_transformed
         team_type = team['Type']
         if team_type in exclude_list:
-            team['Owning Initiative'] = None
-            team['Owning Business Unit'] = None
+            team[owning_initative_str] = None
+            team[owning_bu_str] = None
             continue
         parent_bu_workday_id = find_bu(team, teams_dict)
-        team['Owning Initiative'] = parent_bu_workday_id
+        team[owning_bu_str] = parent_bu_workday_id
         parent_initiative_workday_id = find_initiative(team, teams_dict)
-        team['Owning Business Unit'] = parent_initiative_workday_id
+        team[owning_initative_str] = parent_initiative_workday_id
 
 def transform_war_group_data(response):
     war_group_dict = create_group_dictionary(response)
@@ -323,7 +326,8 @@ def format_product_data(transformed_data):
 
     for rdm_rrn in transformed_data:
         data = transformed_data[rdm_rrn]
-        product_obj = rdm_obj(data, 'rdm_rrn')
+        product_obj = data_obj(data, 'rdm_rrn')
+        data['Active?'] = 'Active'
         if data['Slack']:
             data['Slack'] = format_slack_string(data['Slack'])
         if data['Pager Duty'] == None or data['Pager Duty'] == 'a':

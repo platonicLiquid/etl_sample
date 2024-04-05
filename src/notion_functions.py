@@ -62,3 +62,87 @@ def use_prod_or_dev_dbs(db_type = 'DEV'):
             }
     
     return(VIEW_DICT)
+
+def set_page_properties(page, columns_iterator, properties_dictionary, data_obj):
+    try:
+        data_obj.page_properties_set_bool = False
+        for property in columns_iterator:
+            try:
+                data = data_obj.data_transformed
+                notion_property_id = properties_dictionary[property]
+                current_property_value = page.get_property(notion_property_id)
+                proposed_change = data.get(property, None)
+                if not proposed_change:
+                    if current_property_value:
+                        page.set_property(notion_property_id, [])
+                    continue
+                if current_property_value == proposed_change:
+                    continue
+                else:
+                    title = page.title_plaintext
+                    print(f'Setting {property} for {title}')
+                    page.set_property(notion_property_id, proposed_change)
+            except Exception as e:
+                print(e)
+                if "520 Server Error" in str(e):
+                    page.set_property(notion_property_id, proposed_change)
+                else:
+                    logging.error(f' for notion page id: {page.id}, property: {property}.')
+                    raise Exception(e)
+        data_obj.page_properties_set_bool = True
+        return True
+    except Exception as e:
+        print('Error')
+        print(e)
+        raise Exception(e)
+
+def strip_uuid(uuid):
+    return_uuid = uuid.replace('-', '')
+    return return_uuid
+
+def strip_uuids(uuid_list):
+    return_list = []
+    for uuid in uuid_list:
+        stripped_uuid = strip_uuid(uuid)
+        return_list.append(stripped_uuid)
+    return return_list
+
+def set_relations_properties(page, columns_iterator, properties_dictionary, data_obj):
+    try:
+        data_obj.page_properties_set_bool = False
+        for property in columns_iterator:
+            try:
+                data = data_obj.relations_dict
+                notion_property_id = properties_dictionary[property]
+                current_property_value = page.get_property(notion_property_id)
+                unstriped_change = data.get(property, None)
+                if type(proposed_change) == list:
+                    proposed_change = strip_uuids(unstriped_change)
+                elif type(proposed_change) == str:
+                    proposed_change = strip_uuid(unstriped_change)
+                else:
+                    proposed_change = None
+                if not proposed_change:
+                    if current_property_value:
+                        page.set_property(notion_property_id, [])
+                    continue
+                if current_property_value == proposed_change:
+                    continue
+                else:
+                    title = page.title_plaintext
+                    print(f'Setting {property} for {title}')
+                    page.set_property(notion_property_id, proposed_change)
+            except Exception as e:
+                print(e)
+                if "520 Server Error" in str(e):
+                    page.set_property(notion_property_id, proposed_change)
+                else:
+                    logging.error(f' for notion page id: {page.id}, property: {property}.')
+                    raise Exception
+        data_obj.page_properties_set_bool = True
+        return True
+    except Exception as e:
+        print('Error')
+        print(e)
+        raise Exception
+

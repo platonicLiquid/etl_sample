@@ -21,11 +21,13 @@ TEAMS_COLUMNS = ['Team Name', 'Type', 'Mission', 'Active?', 'rdm_rrn', 'scope',
 #Iterators are used as the properties we want to set.
 # todo: add the following properties:
 #    'Homepage', 'Captain'
-PRODUCTS_COLUMNS_ITERATOR = ['Product Name', 'Type', 'Brief Description',
+PRODUCTS_COLUMNS_TEXT_ITERATOR = ['Product Name', 'Type', 'Brief Description',
     'Slack', 'Email', 'Pager Duty', 'Status', 'Riot Org URL (Click to Edit Product)',
     'rdm_rrn']
-TEAMS_COLUMNS_ITERATOR = ['Team Name', 'scope', 'Type', 'Mission', 'Slack', 'Email',
+TEAMS_COLUMNS_TEXT_ITERATOR = ['Team Name', 'scope', 'Type', 'Mission', 'Slack', 'Email',
     'Riot Org URL (Click to Edit Team)', 'workdayID', 'Active?', 'Support Channels']
+PRODUCT_COLUMNS_RELATIONS_ITERATOR = ['Owning Team(s)', 'Owning Business Unit', 'Owning Initiative']
+TEAMS_COLUMNS_RELATIONS_ITERATOR = ['Parent', 'Owning Business Unit', 'Owning Initiative']
 SKIP_LIST = ['Parent', 'Homepage', 'Children', 'Products', 'Owning Team(s)']
 
 def return_views():
@@ -40,10 +42,12 @@ def return_views():
 
 def return_static_column_attrs():
     return_dict = {
-        'product_column_names': PRODUCTS_COLUMNS,
+        'products_column_names': PRODUCTS_COLUMNS,
         'teams_column_names': TEAMS_COLUMNS,
-        'products_columns_iterator': PRODUCTS_COLUMNS_ITERATOR,
-        'teams_columns_iterator': TEAMS_COLUMNS_ITERATOR,
+        'products_columns_text_iterator': PRODUCTS_COLUMNS_TEXT_ITERATOR,
+        'teams_columns_text_iterator': TEAMS_COLUMNS_TEXT_ITERATOR,
+        'products_columns_relations_iterator': PRODUCT_COLUMNS_RELATIONS_ITERATOR,
+        'teams_columns_relations_iterator': TEAMS_COLUMNS_RELATIONS_ITERATOR,
         'skip_list': SKIP_LIST 
     }
 

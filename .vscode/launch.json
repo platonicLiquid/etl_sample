@@ -5,10 +5,17 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python Debugger: Current File",
+            "name": "Python Debugger: etl.py",
             "type": "debugpy",
             "request": "launch",
-            "program": "${file}",
+            "program": "${workspaceFolder}/src/etl.py",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Python Debugger: testing_relations.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/testing_relations.py",
             "console": "integratedTerminal"
         }
     ]
