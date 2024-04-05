@@ -1,10 +1,10 @@
 # these are the collection view Notion UUIDs. 
 # Prod is live production. Dev is for development
 #TODO Document how to get these values
-PRODUCTS_COLLECTION_VIEW_PROD = '70cf378fbdd741cb9d72540ce61d0094?'\
-    'v=aa863dfcef684d4bb0a58f5f193804e7'
-TEAMS_COLLECTION_VIEW_PROD = 'f84cbf26f3cd4e3a8adae7fa61dc0206?'\
-    'v=cb5473ceba2d473aa140fa7e60a9cca4'
+PRODUCTS_COLLECTION_VIEW_PROD = ''#'70cf378fbdd741cb9d72540ce61d0094?'\
+    #'v=aa863dfcef684d4bb0a58f5f193804e7'
+TEAMS_COLLECTION_VIEW_PROD = ''#'f84cbf26f3cd4e3a8adae7fa61dc0206?'\
+    #'v=cb5473ceba2d473aa140fa7e60a9cca4'
 PRODUCTS_COLLECTION_VIEW_DEV = 'c2d332a5ef51458b91adf7ed0ab6cf84?'\
     'v=e3fea6ced3874a778eba09682ae39b0f'
 TEAMS_COLLECTION_VIEW_DEV = '4cdb4e0b67584a66b330c058631ff005?'\

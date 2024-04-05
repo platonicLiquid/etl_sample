@@ -1,4 +1,4 @@
-from rdm_wrapper import rdm_api
+from riotorg_apis_wrapper import riotorg_api
 
 from rdm_secrets import secrets as rdm_secrets
 from war_groups_secrets import secrets as war_secrets
@@ -20,7 +20,7 @@ def call_riotorg(teams_or_products, page=None):
         raise Exception
 
     query_string = return_query_string(teams_or_products, page)
-    graphql_response = rdm_api(api, token=token)
+    graphql_response = riotorg_api(api, token=token)
     try:
         graphql_response.call_graphql(query_string=query_string)
     except Exception as e:

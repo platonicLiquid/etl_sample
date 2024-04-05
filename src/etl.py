@@ -74,7 +74,7 @@ def main():
     print('Transforming data.')
     transformed_data = transform(extracted_data, status_obj)
     print('Beginning loading data.')
-    process_time = load(transformed_data, status_obj)
+    load(transformed_data, status_obj)
     
     status_obj.time_keeper.get_time_elapsed()
 
