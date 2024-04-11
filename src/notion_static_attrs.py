@@ -1,14 +1,14 @@
 # these are the collection view Notion UUIDs. 
 # Prod is live production. Dev is for development
 #TODO Document how to get these values
-PRODUCTS_COLLECTION_VIEW_PROD = ''#'70cf378fbdd741cb9d72540ce61d0094?'\
-    #'v=aa863dfcef684d4bb0a58f5f193804e7'
-TEAMS_COLLECTION_VIEW_PROD = ''#'f84cbf26f3cd4e3a8adae7fa61dc0206?'\
-    #'v=cb5473ceba2d473aa140fa7e60a9cca4'
-PRODUCTS_COLLECTION_VIEW_DEV = 'c2d332a5ef51458b91adf7ed0ab6cf84?'\
-    'v=e3fea6ced3874a778eba09682ae39b0f'
-TEAMS_COLLECTION_VIEW_DEV = '4cdb4e0b67584a66b330c058631ff005?'\
-    'v=c250c069cc8142e8a93895d9b1c08930'
+PRODUCTS_COLLECTION_VIEW_PROD = '70cf378fbdd741cb9d72540ce61d0094?'\
+    'v=aa863dfcef684d4bb0a58f5f193804e7'
+TEAMS_COLLECTION_VIEW_PROD = 'f84cbf26f3cd4e3a8adae7fa61dc0206?'\
+    'v=cb5473ceba2d473aa140fa7e60a9cca4'
+PRODUCTS_COLLECTION_VIEW_DEV = '8f6d0a7927ab4db7978f943438dd37bc?'\
+    'v=fabe8cc11a7b4d1fb9b8778c83753e7f'
+TEAMS_COLLECTION_VIEW_DEV = '03b01aaa6c6f4712b14a8fc07af44425?'\
+    'v=16730a0eae194494af8f582c9d56ec74'
 
 #Columns are used to map column ids
 PRODUCTS_COLUMNS = ['Product Name', 'Type', 'Owning Team(s)', 'Brief Description',
@@ -25,7 +25,8 @@ PRODUCTS_COLUMNS_TEXT_ITERATOR = ['Product Name', 'Type', 'Brief Description',
     'Slack', 'Email', 'Pager Duty', 'Status', 'Riot Org URL (Click to Edit Product)',
     'rdm_rrn']
 TEAMS_COLUMNS_TEXT_ITERATOR = ['Team Name', 'scope', 'Type', 'Mission', 'Slack', 'Email',
-    'Riot Org URL (Click to Edit Team)', 'workdayID', 'Active?', 'Support Channels']
+    'Riot Org URL (Click to Edit Team)', 'workdayID', 'Support Channels',
+    'Captain']
 PRODUCT_COLUMNS_RELATIONS_ITERATOR = ['Owning Team(s)', 'Owning Business Unit', 'Owning Initiative']
 TEAMS_COLUMNS_RELATIONS_ITERATOR = ['Parent', 'Owning Business Unit', 'Owning Initiative']
 SKIP_LIST = ['Parent', 'Homepage', 'Children', 'Products', 'Owning Team(s)']

@@ -1,12 +1,13 @@
-from scraper import call_riotorg
 from datetime import date
 import logging
+
+from scraper import call_riotorg
 
 current_date = date.today()
 logging.basicConfig(
         filename=f'./logs/data_extraction_log_{current_date}.log',
         encoding='utf-8',
-        level=logging.DEBUG
+        level=logging.ERROR
     )
 
 def extract_teams_data_from_war_groups():
@@ -28,7 +29,7 @@ def extract_teams_data_from_war_groups():
                     return_data.append(elem)
             page += 1
     except Exception as e:
-        logging.ERROR(e)
+        logging.error(e)
         raise Exception
 
     return return_data
@@ -37,7 +38,7 @@ def extract_products_data_from_rdm():
     try:
         return_data = call_riotorg('products')
     except Exception as e:
-        logging.ERROR(e)
+        logging.error(e)
         raise Exception
 
     return return_data

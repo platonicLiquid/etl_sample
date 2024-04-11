@@ -1,11 +1,11 @@
 #native imports
 import logging
-from datetime import date, time
+from datetime import date
 
 #local imports
 import group_column_mapping
 import product_column_mapping
-from classes import data_obj
+from etl_classes import data_obj
 
 # static strings
 GROUPS_URL_PREFIX = 'https://org.riotnet.io/teams/'
@@ -17,7 +17,7 @@ current_date = date.today()
 logging.basicConfig(
         filename=f'./logs/transformations_log_{current_date}.log',
         encoding='utf-8',
-        level=logging.DEBUG
+        level=logging.ERROR
     )
 
 #globals
@@ -152,6 +152,7 @@ def format_data(transformed_data):
         data = transformed_data[workday_id]
         data['Active?'] = 'Active'
         team_obj = data_obj(data, 'workdayID')
+        team_obj.name = data['Team Name']
         if data['Slack']:
             data['Slack'] = format_slack_string(data['Slack'])
         if data['Support Channels']:
@@ -282,11 +283,11 @@ def extract_workday_id(edge_list, product_dict, war_scope_dict):
         owning_group = elem['group']
         owning_group_scope = owning_group['scope']
         owning_group_scope = owning_group_scope.replace('riot.', '')
-        try:
-            workday_id = war_scope_dict[owning_group_scope]
-        except:
+        workday_id = war_scope_dict.get(owning_group_scope, None)
+        if not workday_id:
             continue
-        owning_group_workday_ids.append(workday_id)
+        else:
+            owning_group_workday_ids.append(workday_id)
     
     product_dict['owning_group_workday_ids'] = owning_group_workday_ids
 
@@ -327,6 +328,7 @@ def format_product_data(transformed_data):
     for rdm_rrn in transformed_data:
         data = transformed_data[rdm_rrn]
         product_obj = data_obj(data, 'rdm_rrn')
+        product_obj.name = data['Product Name']
         data['Active?'] = 'Active'
         if data['Slack']:
             data['Slack'] = format_slack_string(data['Slack'])

@@ -1,6 +1,7 @@
 #native imports
 import concurrent.futures
-from datetime import date, datetime
+from datetime import date
+import time
 import logging
 
 #3rd party modules
@@ -8,7 +9,7 @@ from notion.client import NotionClient
 
 #local imports
 from notion_secrets import secrets
-import classes
+import etl_classes
 import notion_functions
 from notion_static_attrs import return_static_column_attrs
 
@@ -17,7 +18,7 @@ current_date = date.today()
 logging.basicConfig(
         filename=f'./logs/load_log_{current_date}.log',
         encoding='utf-8',
-        level=logging.DEBUG
+        level=logging.ERROR
     )
 
 #concurrency setup
@@ -51,16 +52,17 @@ def set_root_page(row, data_dict):
         'parent_group': None,
         'Team Name': 'Riot Games',
         'scope': 'riot',
-        'Type': 'Company'
+        'Type': 'Company',
+        'Active?': 'Active'
     }
-    data_obj = classes.data_obj(data, 'workdayID')
+    data_obj = etl_classes.data_obj(data, 'workdayID')
     data_obj.page_in_current_rows = True
     set_uuid_and_page_obj(row, data_obj)
     data_dict['ROOT'] = data_obj
 
 def stage_for_setting_active_to_false(row, data_dict, id_type, id):
-    data = { 'Active?': 'False'}
-    data_obj = classes.data_obj(data, id_type)
+    data = { 'Active?': 'Inactive'}
+    data_obj = etl_classes.data_obj(data, id_type)
     data_obj.data_obj_in_source_data = False
     set_uuid_and_page_obj(row, data_obj)
     data_dict[id] = data_obj
@@ -111,8 +113,15 @@ def match_data_to_current_rows(data_dict, current_rows, columns_properties_dict,
                 try:
                     future.result()
                 except Exception as e:
-                    print('%r generated an exception: %s' % (row, e))
-                    raise Exception
+                    browseable_url = data_obj.notion_page_obj.get_browseable_url()
+                    page_title = data_obj.notion_page_obj.title_plaintext
+                    data_obj_name = data_obj.name
+                    logging.error(
+                        f'PROPERTY SETTING ERROR for {data_obj_name} at Notion page: {browseable_url}.\n'
+                        f'Page title: "{page_title}".\n'\
+                        f'Property: {e.property}\n'\
+                        f'Proposed Change: {e.proposed_change}'
+                    )
     else:
         for row in current_rows:
             process_rows(
@@ -145,30 +154,43 @@ def stage_changes(data, client_objects, properties_dicts, status_obj):
     print('Staging changes for products.')
     stage_changes_for_current_rows(products_dict, products_view, products_properties_dict, status_obj)
 
-def concurrently_generate_new_pages(data_obj, view):
+def execute_generate_new_pages(data_obj, view):
     if data_obj.notion_uuid:
         return
-    new_row = view.collection.add_row()
+    try:
+        new_row = view.collection.add_row()
+    except Exception as e:
+        if str(413) in str(e):
+            time.sleep(3)
+            new_row = view.collection.add_row()
+        else:
+            logging.error(f'ROW CREATION ERROR: Unable to create new row for {data_obj.name}. Error:\n{e}')
     set_uuid_and_page_obj(new_row, data_obj)
 
-def generate_new_pages(data_dict, view):
-    with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
-        future_to_data_obj = {
-            executor.submit(
-                concurrently_generate_new_pages,
-                data_dict[id],
-                view
-            ): data_dict[id] for id in data_dict
-        }
-        for future in concurrent.futures.as_completed(future_to_data_obj):
-            data_obj = future_to_data_obj[future]
-            try:
-                future.result()
-            except Exception as e:
-                print('%r generated an exception: %s' % (data_obj, e))
-                raise Exception
+def generate_new_pages(data_dict, view, status_obj):
+    if status_obj.use_concurrency:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+            future_to_data_obj = {
+                executor.submit(
+                    execute_generate_new_pages,
+                    data_obj,
+                    view
+                ): data_obj for data_obj in data_dict.values()
+            }
+            for future in concurrent.futures.as_completed(future_to_data_obj):
+                data_obj = future_to_data_obj[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    browseable_url = data_obj.notion_page_obj.get_browseable_url()
+                    page_title = data_obj.notion_page_obj.title_plaintext
+                    data_obj_name = data_obj.name
+                    logging.error(f'PAGE GENERATION ERROR for: {data_obj_name} at Notion page: {browseable_url} page title: "{page_title}".')
+    else:
+        for data_obj in data_dict.values():
+            execute_generate_new_pages(data_obj, view)
 
-def generate_new_pages_setup_then_execute(data, client_objects):
+def generate_new_pages_setup_then_execute(data, client_objects, status_obj):
     teams_dict = data['teams_dict']
     products_dict = data['products_dict']
 
@@ -176,9 +198,9 @@ def generate_new_pages_setup_then_execute(data, client_objects):
     products_view = client_objects['products_view']
 
     print('Creating pages for teams.')
-    generate_new_pages(teams_dict, teams_view)
+    generate_new_pages(teams_dict, teams_view, status_obj)
     print('Creating pages for Products.')
-    generate_new_pages(products_dict, products_view)
+    generate_new_pages(products_dict, products_view, status_obj)
 
 def set_text_properties(page, data_obj, properties_dict, id_type):
     if id_type == 'workdayID':
@@ -189,9 +211,9 @@ def set_text_properties(page, data_obj, properties_dict, id_type):
         try:
             raise ValueError(f'Invalid idtype: {id_type}')
         except ValueError:
-            raise Exception
+            logging.error(ValueError)
         
-    notion_functions.set_page_properties(page, columns_iterator, properties_dict, data_obj)
+    notion_functions.notion_call_set_page_properties(page, columns_iterator, properties_dict, data_obj)
 
 def active_test(data):
     if data['Active?'] == 'False':
@@ -245,7 +267,7 @@ def map_teams_relations(data_obj, teams_dict):
         if not owning_initiative_uuid:
             relations_dict[owning_initative_str] = None
         else:
-            relations_dict[owning_initiative_id] = owning_initiative_uuid
+            relations_dict[owning_initative_str] = owning_initiative_uuid
     
     data_obj.relations_dict = relations_dict
 
@@ -255,12 +277,14 @@ def map_products_relations(data_obj, teams_dict):
     if active_test(data):
         return
     
-    parent_ids = data['owning_group_workday_ids']
+    parent_ids = data.get('Owning Group Workday ID', None)
 
     if not parent_ids:
+        relations_dict = {}
         relations_dict[owning_teams_str] = None
         relations_dict[owning_bu_str] = None
         relations_dict[owning_initative_str] = None
+        data_obj.relations_dict = relations_dict
         return
     
     owning_teams_uuids = []
@@ -316,40 +340,46 @@ def set_relations_properties(page, data_obj, properties_dict, teams_dict, id_typ
         try:
             raise ValueError(f'Invalid idtype: {id_type}')
         except ValueError:
-            raise Exception
+            logging.error(ValueError)
     
-    notion_functions.set_relations_properties(page, columns_iterator, properties_dict, data_obj)
+    notion_functions.notion_call_set_relations_properties(page, columns_iterator, properties_dict, data_obj)
 
-def concurrently_update_all_pages(data_obj, properties_dict, teams_dict):
+def execute_update_all_pages(data_obj, properties_dict, teams_dict):
     if not data_obj.notion_page_obj:
         return
     page = data_obj.notion_page_obj
     id_type = data_obj.id_type
-    #set_text_properties(page, data_obj, properties_dict, id_type)
+    set_text_properties(page, data_obj, properties_dict, id_type)
     set_relations_properties(page, data_obj, properties_dict, teams_dict, id_type)
 
-def update_all_pages(data_dict, properties_dict, teams_dict, use_concurrency=True):
-    if use_concurrency:
+def update_all_pages(data_dict, properties_dict, teams_dict, status_obj):
+    if status_obj.use_concurrency:
         with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
             future_to_data_obj = {
                 executor.submit(
-                    concurrently_update_all_pages,
-                    data_dict[id],
+                    execute_update_all_pages,
+                    data_obj,
                     properties_dict,
                     teams_dict
-                ): data_dict[id] for id in data_dict
+                ): data_obj for data_obj in data_dict.values()
             }
             for future in concurrent.futures.as_completed(future_to_data_obj):
                 data_obj = future_to_data_obj[future]
                 try:
                     future.result()
                 except Exception as e:
-                    print('%r generated an exception: %s' % (data_obj, e))
-                    raise Exception
+                    browseable_url = data_obj.notion_page_obj.get_browseable_url()
+                    page_title = data_obj.notion_page_obj.title_plaintext
+                    data_obj_name = data_obj.name
+                    logging.error(
+                        f'PROPERTY SETTING ERROR for {data_obj_name} at Notion page: {browseable_url}.\n'
+                        f'Page title: "{page_title}".\n'\
+                        f'Property: {e.property}\n'\
+                        f'Proposed Change: {e.proposed_change}'
+                    )
     else:
         for data_obj in data_dict.values():
-            update_all_pages(data_obj, properties_dict, teams_dict)
-
+            execute_update_all_pages(data_obj, properties_dict, teams_dict)
 
 def update_all_pages_setup_then_execute(data, properties_dicts, status_obj):
     teams_dict = data['teams_dict']
@@ -359,12 +389,12 @@ def update_all_pages_setup_then_execute(data, properties_dicts, status_obj):
     products_properties_dict = properties_dicts['products_properties_dict']
 
     print('Updating Teams.')
-    update_all_pages(teams_dict, teams_properties_dict, teams_dict, status_obj.use_concurrency)
+    update_all_pages(teams_dict, teams_properties_dict, teams_dict, status_obj)
     print('Updating Products.')
-    update_all_pages(products_dict, products_properties_dict, teams_dict, status_obj.use_concurrency)
+    update_all_pages(products_dict, products_properties_dict, teams_dict, status_obj)
 
 def execute_changes(data, client_objects, properties_dicts, status_obj):
-    generate_new_pages_setup_then_execute(data, client_objects)
+    generate_new_pages_setup_then_execute(data, client_objects, status_obj)
     update_all_pages_setup_then_execute(data, properties_dicts, status_obj)
 
 def return_client_objects(prod_or_dev):

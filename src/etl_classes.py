@@ -35,9 +35,9 @@ class TimeKeeper:
             #minutes \
             #seconds
         self.time_elapsed = \
-            (end_time - start_time).seconds // 3600, \
-            (end_time - start_time).seconds % 3600 // 60, \
-            (end_time - start_time).seconds % 60
+            f'{(end_time - start_time).seconds // 3600} hrs, ' \
+            f'{(end_time - start_time).seconds % 3600 // 60}mins, '\
+            f'{(end_time - start_time).seconds % 60} secs'
 
     def stages(self, stage_name):
         if stage_name == 'extract':

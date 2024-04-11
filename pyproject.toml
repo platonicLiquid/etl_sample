@@ -1,10 +1,15 @@
 [build-system]
-requires = ["setuptools", "requests", "gql"]
+requires = [
+  'setuptools,
+  'pandas',
+  'riotorg_apis_wrapper @ git+https://gh.riotgames.com/matthew-yocum/riotorg-apis-wrapper',
+  'notion-py @ git+https://gh.riotgames.com/matthew-yocum/notion-py'
+]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rdm-api-wrapper"
-version = "0.0.4"
+name = "riot-org-to-notion-etl"
+version = "1.0.0"
 dependencies =[
   "requests",
   "gql",
