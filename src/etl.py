@@ -10,14 +10,15 @@ logging.basicConfig(
     )
 
 #lskm imports
-from extract_data_from_riotorg import extract_teams_data_from_war_groups, extract_products_data_from_rdm
+from extract_data_from_riotorg import extract_teams_data_from_war_groups, extract_products_data_from_rdm_graphql, extract_products_data_from_rdm_node
 from transform_data import transform_war_group_data, transform_rdm_product_data
 import load_data
 from etl_classes import ETLStatus
 
 #dictionary_strings
 TEAMS_DATA_RAW = 'teams_data_raw'
-PRODUCTS_DATA_RAW = 'products_data_raw'
+PRODUCTS_DATA_GRAPHQL_RAW = 'products_data_graphql_raw'
+PRODUCTS_DATA_NODE_RAW = 'products_data_node_raw'
 TEAMS_DICT = 'teams_dict'
 PRODUCTS_DICT = 'products_dict'
 
@@ -28,11 +29,13 @@ def extract(status_obj):
     status_obj.time_keeper.stages('extract')
 
     teams_data_raw = extract_teams_data_from_war_groups()
-    products_data_raw = extract_products_data_from_rdm()
+    products_data_graphql_raw = extract_products_data_from_rdm_graphql()
+    products_data_node_raw = extract_products_data_from_rdm_node()
 
     return_dict = {
         TEAMS_DATA_RAW: teams_data_raw,
-        PRODUCTS_DATA_RAW: products_data_raw
+        PRODUCTS_DATA_GRAPHQL_RAW: products_data_graphql_raw,
+        PRODUCTS_DATA_NODE_RAW: products_data_node_raw
     }
 
     status_obj.time_keeper.extract.get_time_elapsed()
@@ -50,10 +53,8 @@ def transform(extracted_data, status_obj):
     
     status_obj.time_keeper.stages('transform')
 
-    extracted_data: dict
-
     teams_dict = transform_war_group_data(extracted_data[TEAMS_DATA_RAW])
-    products_dict = transform_rdm_product_data(extracted_data[PRODUCTS_DATA_RAW], teams_dict)
+    products_dict = transform_rdm_product_data(extracted_data, teams_dict)
 
     return_dict = {
         TEAMS_DICT: teams_dict,
@@ -81,8 +82,8 @@ def end_time(status_obj):
     logging.info(f'Time elapsed = {status_obj.time_keeper.time_elapsed}')
 
 def main():
-    prod_or_dev = 'DEV'
-    dry_run_bool = True
+    prod_or_dev = 'PROD'
+    dry_run_bool = False
     use_concurrency = True
     status_obj = ETLStatus(prod_or_dev, dry_run_bool, use_concurrency)
     

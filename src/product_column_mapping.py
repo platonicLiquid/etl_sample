@@ -10,7 +10,8 @@ def data_schema_names_mapped_to_notion_column_names_dict():
         'slack': 'Slack',
         'email': 'Email',
         'pager_duty_url': 'Pager Duty',
-        'owning_group_workday_ids': 'Owning Group Workday ID'
+        'owning_group_workday_ids': 'Owning Group Workday ID',
+        'notion_url': 'Homepage'
     }
 
     return DATA_SCHEMA_NAMES_MAPPED_TO_NOTION_COLUMN_NAMES_DICT

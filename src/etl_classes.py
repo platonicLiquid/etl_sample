@@ -10,6 +10,7 @@ class data_obj:
         self.notion_page_obj = None
         self.page_in_current_rows = False
         self.data_obj_in_source_data = True
+        self.page_properties_set_bool = False
         
 class dry_run:
     def __init__(self, dry_run_bool):

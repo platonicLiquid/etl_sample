@@ -303,7 +303,7 @@ def add_data_to_product_dict(product, product_dict):
     rdm_rrn = product_dict['rdm_rrn']
     product_dict['riot_org_url'] = PRODUCTS_URL_PREFIX + rdm_rrn
 
-def create_product_dictionary(products, teams_dict):
+def create_product_dictionary(products, node_data, teams_dict):
     return_dict = {}
 
     war_scope_dict = create_teams_scope_dict(teams_dict)
@@ -319,6 +319,16 @@ def create_product_dictionary(products, teams_dict):
         extract_workday_id(owning_group_list, product_dict, war_scope_dict)
         
         return_dict[rdm_rrn] = product_dict
+    
+    for row in node_data:
+        rdm_rrn = row['rrn']
+        rrn_dict = return_dict.get(rdm_rrn, None)
+        data = row['data']
+        notion_url = data.get('notion_url', None)
+        if notion_url:
+            rrn_dict['notion_url'] = notion_url
+        elif rrn_dict:
+            rrn_dict['notion_url'] = None
 
     return return_dict
 
@@ -338,10 +348,12 @@ def format_product_data(transformed_data):
 
     return return_dict
 
-def transform_rdm_product_data(response, teams_dict):
-    data = response['graphql']['product']
+def transform_rdm_product_data(response_dict, teams_dict):
+    node_data = response_dict['products_data_node_raw']
+    graphql_data_raw = response_dict['products_data_graphql_raw']
+    graphql_data = graphql_data_raw['product']
 
-    product_dict = create_product_dictionary(data, teams_dict)
+    product_dict = create_product_dictionary(graphql_data, node_data, teams_dict)
 
     data_schema_dict = product_column_mapping.data_schema_names_mapped_to_notion_column_names_dict()
     transformed_data = map_data_to_notion_columns(product_dict, data_schema_dict)

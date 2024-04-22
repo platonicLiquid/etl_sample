@@ -216,7 +216,7 @@ def set_text_properties(page, data_obj, properties_dict, id_type):
     notion_functions.notion_call_set_page_properties(page, columns_iterator, properties_dict, data_obj)
 
 def active_test(data):
-    if data['Active?'] == 'False':
+    if data['Active?'] == 'Inactive' or data['Active?'] == 'False':
         return True
     else:
         return False
@@ -345,8 +345,16 @@ def set_relations_properties(page, data_obj, properties_dict, teams_dict, id_typ
     notion_functions.notion_call_set_relations_properties(page, columns_iterator, properties_dict, data_obj)
 
 def execute_update_all_pages(data_obj, properties_dict, teams_dict):
+    # If there is .notion_page_obj = None, return.
+    # If data['Active?'] = 'Inactive', return.
+    # Else, set text properties and then set relations properties.
+
     if not data_obj.notion_page_obj:
         return
+    data = data_obj.data_transformed
+    if active_test(data):
+        return
+    
     page = data_obj.notion_page_obj
     id_type = data_obj.id_type
     set_text_properties(page, data_obj, properties_dict, id_type)

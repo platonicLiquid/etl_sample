@@ -23,7 +23,7 @@ TEAMS_COLUMNS = ['Team Name', 'Type', 'Mission', 'Active?', 'rdm_rrn', 'scope',
 #    'Homepage', 'Captain'
 PRODUCTS_COLUMNS_TEXT_ITERATOR = ['Product Name', 'Type', 'Brief Description',
     'Slack', 'Email', 'Pager Duty', 'Status', 'Riot Org URL (Click to Edit Product)',
-    'rdm_rrn']
+    'rdm_rrn', 'Homepage']
 TEAMS_COLUMNS_TEXT_ITERATOR = ['Team Name', 'scope', 'Type', 'Mission', 'Slack', 'Email',
     'Riot Org URL (Click to Edit Team)', 'workdayID', 'Support Channels',
     'Captain']
